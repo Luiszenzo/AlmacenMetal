@@ -3,7 +3,7 @@ const ASSETS = [
   "/",
   "/index.html",
   "/manifest.json",
-  "/logo.svg"
+  "/logogarage.png"
 ];
 
 // Install Service Worker and cache resources
