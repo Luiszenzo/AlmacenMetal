@@ -811,3 +811,124 @@ input:checked + .slider:before {
     opacity: 1;
   }
 }
+
+/* Mobile responsive navigation & header */
+.mobile-header {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 60px;
+    background: rgba(10, 15, 30, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--panel-border);
+    padding: 0 1rem;
+    z-index: 100;
+  }
+  
+  .mobile-header-logo {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 700;
+    font-size: 1.1rem;
+    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+  
+  .mobile-header-logo svg {
+    stroke: var(--primary);
+  }
+
+  .sidebar {
+    width: 100%;
+    height: 65px;
+    position: fixed;
+    bottom: 0;
+    top: auto;
+    left: 0;
+    flex-direction: row;
+    padding: 0 0.5rem;
+    border-top: 1px solid var(--panel-border);
+    border-right: none;
+    border-radius: 0;
+    z-index: 100;
+  }
+
+  .sidebar-logo {
+    display: none;
+  }
+
+  .sidebar-menu {
+    flex-direction: row;
+    justify-content: space-around;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    gap: 0;
+  }
+
+  .sidebar-item {
+    flex-grow: 1;
+    display: flex;
+    justify-content: center;
+  }
+
+  .sidebar-item button {
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    padding: 6px 0;
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    transform: none !important;
+  }
+
+  .sidebar-item button span {
+    font-size: 0.65rem;
+  }
+
+  .sidebar-item button svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .sidebar-item.active button {
+    border-left: none;
+    border-bottom: 3px solid var(--primary);
+    background: transparent;
+    border-radius: 0;
+  }
+
+  .sidebar-user {
+    display: none;
+  }
+
+  .main-content {
+    margin-left: 0;
+    max-width: 100%;
+    padding: 1rem;
+    padding-top: 5rem;
+    padding-bottom: 6rem; /* extra space to avoid bottom bar */
+  }
+
+  /* Make tables scrollable on mobile */
+  .table-container {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+}

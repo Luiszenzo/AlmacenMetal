@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <!-- Background -->
+  <defs>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#00d2ff" />
+      <stop offset="100%" stop-color="#8b5cf6" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="100%" height="100%" rx="128" fill="#0b0f19" />
+  
+  <!-- Outer Glow circle -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="url(#glow)" stroke-width="16" opacity="0.8" />
+  
+  <!-- Wrench / Tool Graphics inside -->
+  <g transform="translate(128, 128) scale(0.5)" fill="url(#glow)">
+    <!-- Custom Wrench Shape -->
+    <path d="M470 383L371 284c-5-5-13-5-18 0l-37 37c-5 5-5 13 0 18l99 99c15 15 39 15 54 0l1-1c15-15 15-39 0-54z" />
+    <path d="M72 316c14-22 36-39 63-46l25-103c-2-7-5-15-7-22L42 124c-11 5-25 1-31-10s-5-25 5-31l63-31c11-5 25-1 31 10s1 25-10 31l-3 1 45 45c11-1 22 2 31 10 10 9 14 22 13 35l103 26c11-20 28-36 49-46 51-24 113-3 137 48 10 22 12 47 4 70L360 216c-9-9-23-9-32 0l-42 42c-9 9-9 23 0 32l108-108c23 8 47 6 69-4 51-24 72-86 48-137-14-30-39-51-69-58L339 285c-7 27-24 49-46 63-51 32-118 16-150-35-14-22-18-48-13-73l-103-26c-2 4-4 9-7 13l-45 45c9 9 9 23 0 32l-42 42c-9 9-23 9-32 0l108-108c-8-23-6-47 4-69C127 151 189 130 240 154" />
+  </g>
+  
+  <!-- Stylized M & S representing Metal Shapers -->
+  <text x="256" y="295" font-family="'Outfit', sans-serif" font-size="110" font-weight="900" fill="url(#glow)" text-anchor="middle" letter-spacing="2">MS</text>
+</svg>

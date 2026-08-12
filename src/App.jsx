@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from './config/firebase';
 import { checkFirebaseStatus, logoutUser } from './config/dbService';
+import { Wrench, LogOut } from 'lucide-react';
 
 // Views
 import Login from './views/Login';
@@ -149,6 +150,20 @@ function App() {
 
   return (
     <div className="app-container">
+      <header className="mobile-header">
+        <div className="mobile-header-logo">
+          <Wrench size={20} />
+          <span>Metal Shapers</span>
+        </div>
+        <button 
+          onClick={handleLogout} 
+          style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px', display: 'flex', alignItems: 'center' }}
+          title="Cerrar Sesión"
+        >
+          <LogOut size={20} />
+        </button>
+      </header>
+
       <Sidebar 
         currentView={currentView} 
         setView={setCurrentView} 
