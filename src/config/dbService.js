@@ -39,13 +39,50 @@ const defaultInventory = [
 ];
 
 const defaultVehicles = [
-  { folio: "V-1001", plate: "XYZ-123-A", type: "Coche", details: "Sedan Chevrolet Aveo 2018 - Afinación mayor y cambio de balatas", imageUrl: "", active: true, entryDate: new Date().toISOString() },
-  { folio: "V-1002", plate: "TR-882-P", type: "Tracto", details: "Kenworth T680 2021 - Falla de luces en cabina y amortiguador flojo", imageUrl: "", active: true, entryDate: new Date().toISOString() },
-  { folio: "V-1003", plate: "MOTO-99", type: "Motocicleta", details: "Yamaha R6 2019 - Cambio de bujías y filtro de aceite", imageUrl: "", active: false, entryDate: new Date().toISOString() }
+  { 
+    folio: "V-1001", orderNumber: "ORD-2026-001", plate: "XYZ-123-A", model: "Chevrolet Aveo 2018",
+    type: "Coche", details: "Afinación mayor y cambio de balatas delanteras. Se detectó fuga leve en radiador.",
+    imageUrls: [], admissionPassUrl: "",
+    bodyworkStatus: "en_proceso", mechanicsStatus: "pendiente",
+    orderedParts: [
+      { id: "op1", name: "Radiador Chevrolet Aveo", supplier: "Refaccionaria García", status: "pedido", quantity: 1, notes: "Pedido el 10/08" }
+    ],
+    active: true, entryDate: new Date().toISOString(), deliveredAt: null
+  },
+  { 
+    folio: "V-1002", orderNumber: "ORD-2026-002", plate: "TR-882-P", model: "Kenworth T680 2021",
+    type: "Tracto", details: "Falla de luces en cabina y amortiguador flojo. Revisión de frenos de aire.",
+    imageUrls: [], admissionPassUrl: "",
+    bodyworkStatus: "pendiente", mechanicsStatus: "en_proceso",
+    orderedParts: [],
+    active: true, entryDate: new Date().toISOString(), deliveredAt: null
+  },
+  { 
+    folio: "V-1003", orderNumber: "ORD-2026-003", plate: "MOTO-99", model: "Yamaha R6 2019",
+    type: "Motocicleta", details: "Cambio de bujías y filtro de aceite. Ajuste de cadena.",
+    imageUrls: [], admissionPassUrl: "",
+    bodyworkStatus: "terminado", mechanicsStatus: "terminado",
+    orderedParts: [],
+    active: false, entryDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), deliveredAt: new Date().toISOString()
+  }
 ];
 
 const defaultOutgoings = [
   { id: "out1", materialId: "inv1", materialName: "Balata Delantera", quantity: 4, technicianId: "tecnico1", technicianName: "Carlos Mendoza (Mecánico)", vehicleFolio: "V-1001", date: new Date().toISOString(), costPerUnit: 350, totalCost: 1400 }
+];
+
+const defaultVehicleUpdates = [
+  {
+    id: "upd1",
+    vehicleFolio: "V-1001",
+    date: new Date().toISOString(),
+    technicianName: "Carlos Mendoza (Mecánico)",
+    bodyworkNote: "Se inició el proceso de alineación de guardafangos delanteros.",
+    mechanicsNote: "",
+    generalNote: "Vehículo recibido. Diagnóstico inicial completado.",
+    photosAdded: [],
+    createdAt: new Date().toISOString()
+  }
 ];
 
 // Helper to check if Firebase is connected / ready (runs check on firestore)
@@ -64,6 +101,9 @@ const initLocalData = () => {
   }
   if (!localStorage.getItem("workshop_outgoings")) {
     localStorage.setItem("workshop_outgoings", JSON.stringify(defaultOutgoings));
+  }
+  if (!localStorage.getItem("workshop_vehicle_updates")) {
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(defaultVehicleUpdates));
   }
 };
 initLocalData();
@@ -361,11 +401,23 @@ export const saveVehicle = async (vehicle) => {
     const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
     const index = list.findIndex(v => v.folio === vehicle.folio);
     if (index !== -1) {
-      // Edit
+      // Edit — merge fields
       list[index] = { ...list[index], ...vehicle };
     } else {
-      // New
-      list.push({ ...vehicle, active: true, entryDate: new Date().toISOString() });
+      // New — apply defaults for new fields
+      list.push({
+        orderNumber: '',
+        model: '',
+        imageUrls: [],
+        admissionPassUrl: '',
+        bodyworkStatus: 'pendiente',
+        mechanicsStatus: 'pendiente',
+        orderedParts: [],
+        deliveredAt: null,
+        ...vehicle,
+        active: true,
+        entryDate: vehicle.entryDate || new Date().toISOString()
+      });
     }
     localStorage.setItem("workshop_vehicles", JSON.stringify(list));
     return;
@@ -373,6 +425,14 @@ export const saveVehicle = async (vehicle) => {
   try {
     // We use the Folio as the Document ID
     await setDoc(doc(db, "vehicles", vehicle.folio), {
+      orderNumber: '',
+      model: '',
+      imageUrls: [],
+      admissionPassUrl: '',
+      bodyworkStatus: 'pendiente',
+      mechanicsStatus: 'pendiente',
+      orderedParts: [],
+      deliveredAt: null,
       ...vehicle,
       entryDate: vehicle.entryDate || new Date().toISOString()
     }, { merge: true });
@@ -492,5 +552,99 @@ export const registerOutgoing = async (outgoing) => {
       return registerOutgoing(outgoing);
     }
     throw e;
+  }
+};
+
+
+// --- VEHICLE UPDATES / BITÁCORA DIARIA ---
+
+export const getVehicleUpdates = async (vehicleFolio) => {
+  if (useLocalFallback) {
+    const all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    return all
+      .filter(u => u.vehicleFolio === vehicleFolio)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
+  try {
+    const q = query(
+      collection(db, "vehicle_updates"),
+      where("vehicleFolio", "==", vehicleFolio),
+      orderBy("createdAt", "desc")
+    );
+    const snapshot = await getDocs(q);
+    const list = [];
+    snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
+    return list;
+  } catch (e) {
+    console.error("Firestore getVehicleUpdates error:", e);
+    useLocalFallback = true;
+    return getVehicleUpdates(vehicleFolio);
+  }
+};
+
+export const saveVehicleUpdate = async (update) => {
+  if (useLocalFallback) {
+    const all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    const newUpdate = {
+      ...update,
+      id: "upd_" + Date.now(),
+      createdAt: new Date().toISOString()
+    };
+    all.push(newUpdate);
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(all));
+    return newUpdate;
+  }
+  try {
+    const id = "upd_" + Date.now();
+    const ref = doc(db, "vehicle_updates", id);
+    const newUpdate = { ...update, id, createdAt: new Date().toISOString() };
+    await setDoc(ref, newUpdate);
+    return newUpdate;
+  } catch (e) {
+    console.error("Firestore saveVehicleUpdate error:", e);
+    useLocalFallback = true;
+    return saveVehicleUpdate(update);
+  }
+};
+
+export const saveOrderedPart = async (folio, part) => {
+  // Load the vehicle, update the orderedParts array, and save back
+  if (useLocalFallback) {
+    const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+    const index = list.findIndex(v => v.folio === folio);
+    if (index === -1) throw new Error("Vehículo no encontrado.");
+    
+    const parts = list[index].orderedParts || [];
+    if (part.id) {
+      // Update existing
+      const pi = parts.findIndex(p => p.id === part.id);
+      if (pi !== -1) parts[pi] = { ...parts[pi], ...part };
+      else parts.push(part);
+    } else {
+      // New part
+      parts.push({ ...part, id: "op_" + Date.now() });
+    }
+    list[index].orderedParts = parts;
+    localStorage.setItem("workshop_vehicles", JSON.stringify(list));
+    return;
+  }
+  try {
+    const vehicleRef = doc(db, "vehicles", folio);
+    const vehicleSnap = await getDocs(query(collection(db, "vehicles"), where("folio", "==", folio)));
+    if (vehicleSnap.empty) throw new Error("Vehículo no encontrado.");
+    const vehicleData = vehicleSnap.docs[0].data();
+    const parts = vehicleData.orderedParts || [];
+    if (part.id) {
+      const pi = parts.findIndex(p => p.id === part.id);
+      if (pi !== -1) parts[pi] = { ...parts[pi], ...part };
+      else parts.push(part);
+    } else {
+      parts.push({ ...part, id: "op_" + Date.now() });
+    }
+    await updateDoc(vehicleRef, { orderedParts: parts });
+  } catch (e) {
+    console.error("Firestore saveOrderedPart error:", e);
+    useLocalFallback = true;
+    return saveOrderedPart(folio, part);
   }
 };

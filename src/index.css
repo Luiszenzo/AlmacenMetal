@@ -932,3 +932,435 @@ input:checked + .slider:before {
     overflow-x: auto;
   }
 }
+
+/* ============================================
+   VEHICLE MANAGEMENT MODULE — NEW STYLES
+   ============================================ */
+
+/* --- Tabs system for detail modal --- */
+.tabs-header {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--panel-border);
+  margin-bottom: 1.5rem;
+  overflow-x: auto;
+  padding-bottom: 0;
+  scrollbar-width: none;
+}
+.tabs-header::-webkit-scrollbar { display: none; }
+
+.tab-btn {
+  padding: 0.65rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 8px 8px 0 0;
+}
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.03);
+}
+.tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: rgba(0, 210, 255, 0.04);
+}
+
+/* --- Process status badges --- */
+.process-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+.process-badge.pendiente {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border-color: rgba(100, 116, 139, 0.25);
+}
+.process-badge.en_proceso {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+.process-badge.terminado {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+/* Process section box */
+.process-section {
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+.process-section-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.process-section-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.process-status-selector {
+  display: flex;
+  gap: 0.4rem;
+}
+.process-status-btn {
+  padding: 0.25rem 0.7rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+}
+.process-status-btn:hover { background: rgba(255,255,255,0.08); }
+.process-status-btn.active-pendiente { background: rgba(100,116,139,0.2); color: #94a3b8; border-color: rgba(100,116,139,0.3); }
+.process-status-btn.active-en_proceso { background: rgba(245,158,11,0.2); color: #fbbf24; border-color: rgba(245,158,11,0.3); }
+.process-status-btn.active-terminado { background: rgba(16,185,129,0.2); color: #34d399; border-color: rgba(16,185,129,0.3); }
+
+/* --- Photo gallery --- */
+.photo-gallery {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+  scrollbar-width: thin;
+}
+.photo-gallery-item {
+  flex-shrink: 0;
+  width: 140px;
+  height: 105px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  background: rgba(15,23,42,0.6);
+  position: relative;
+  cursor: pointer;
+}
+.photo-gallery-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.2s;
+}
+.photo-gallery-item:hover img { transform: scale(1.05); }
+.photo-gallery-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100px;
+  border: 2px dashed var(--panel-border);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  gap: 0.5rem;
+}
+
+/* Multi-image upload zone */
+.multi-upload-zone {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+}
+.upload-slot {
+  border: 2px dashed var(--panel-border);
+  border-radius: 10px;
+  height: 100px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  overflow: hidden;
+  background: rgba(15,23,42,0.4);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  gap: 0.3rem;
+}
+.upload-slot:hover { border-color: var(--primary); background: rgba(0,210,255,0.04); }
+.upload-slot img { width: 100%; height: 100%; object-fit: cover; position: absolute; top:0; left:0; }
+.upload-slot input[type="file"] { position: absolute; top:0; left:0; width:100%; height:100%; opacity:0; cursor:pointer; }
+.upload-slot .remove-photo {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(239,68,68,0.8);
+  border: none;
+  border-radius: 50%;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: white;
+  font-size: 0.7rem;
+  z-index: 2;
+}
+
+/* --- Timeline / Bitácora --- */
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  position: relative;
+  padding-left: 1.5rem;
+}
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: linear-gradient(to bottom, var(--primary), rgba(139,92,246,0.3));
+}
+.timeline-item {
+  position: relative;
+  padding-bottom: 1.5rem;
+}
+.timeline-dot {
+  position: absolute;
+  left: -1.5rem;
+  top: 4px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--primary), var(--secondary));
+  border: 2px solid var(--bg-color);
+  z-index: 1;
+}
+.timeline-card {
+  background: rgba(15,23,42,0.5);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 1rem;
+}
+.timeline-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.timeline-date {
+  font-size: 0.8rem;
+  color: var(--primary);
+  font-weight: 600;
+}
+.timeline-author {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.timeline-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.timeline-note-row {
+  font-size: 0.85rem;
+  display: flex;
+  gap: 0.5rem;
+}
+.timeline-note-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  min-width: 80px;
+}
+.timeline-note-text {
+  color: var(--text-primary);
+}
+
+/* Add update form */
+.add-update-form {
+  background: rgba(0,210,255,0.03);
+  border: 1px solid rgba(0,210,255,0.1);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
+}
+.add-update-form-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--primary);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* --- Ordered parts table --- */
+.parts-status-select {
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  font-family: inherit;
+  border: 1px solid var(--panel-border);
+  background: rgba(15,23,42,0.8);
+  color: white;
+  cursor: pointer;
+}
+
+/* --- Vehicle card enhancements --- */
+.vehicle-card-process-bar {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+}
+.process-mini-badge {
+  font-size: 0.7rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-weight: 600;
+}
+.process-mini-badge.pendiente { background: rgba(100,116,139,0.2); color: #94a3b8; }
+.process-mini-badge.en_proceso { background: rgba(245,158,11,0.15); color: #fbbf24; }
+.process-mini-badge.terminado { background: rgba(16,185,129,0.15); color: #34d399; }
+
+.vehicle-order-number {
+  font-size: 0.72rem;
+  color: var(--primary);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.2rem;
+}
+.vehicle-model-name {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+/* Delivery confirm modal */
+.delivery-confirm-box {
+  background: rgba(16,185,129,0.06);
+  border: 1px solid rgba(16,185,129,0.2);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-top: 1rem;
+  text-align: center;
+}
+
+/* Lightbox overlay */
+.lightbox-overlay {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  background: rgba(0,0,0,0.9);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: zoom-out;
+}
+.lightbox-overlay img {
+  max-width: 90vw;
+  max-height: 90vh;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+}
+.lightbox-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+  background: transparent;
+  border: none;
+  color: white;
+  font-size: 2rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+/* Admission pass image */
+.admission-pass-box {
+  width: 100%;
+  height: 140px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  background: rgba(15,23,42,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  cursor: pointer;
+}
+.admission-pass-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.admission-pass-box .upload-slot-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+/* Divider helper */
+.section-divider {
+  height: 1px;
+  background: var(--panel-border);
+  margin: 1.25rem 0;
+}
+
+/* Wider modal for vehicle detail */
+.modal-content-wide {
+  width: 100%;
+  max-width: 900px;
+  max-height: 92vh;
+  overflow-y: auto;
+  padding: 2rem;
+  position: relative;
+  animation: modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@media (max-width: 768px) {
+  .modal-content-wide {
+    max-width: 100%;
+    padding: 1.25rem;
+  }
+  .multi-upload-zone {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .photo-gallery-item {
+    width: 110px;
+    height: 82px;
+  }
+}
