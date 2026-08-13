@@ -21,10 +21,49 @@ import { generateVehiclePDF, generateGeneralPDF } from '../utils/reports';
 const PROCESS_LABELS = { pendiente: 'Pendiente', en_proceso: 'En Proceso', terminado: 'Terminado' };
 const PART_STATUS_LABELS = { pendiente: 'Pendiente', pedido: 'Pedido', recibido: 'Recibido' };
 
-const readFileAsBase64 = (file) =>
+// Automatic client-side image compression (down to ~80-120 KB JPEG) to prevent Firestore 1MB limit
+const compressFile = (file, maxWidth = 1024, maxHeight = 1024, quality = 0.65) =>
   new Promise((resolve, reject) => {
+    if (file.type === 'application/pdf') {
+      if (file.size > 800 * 1024) {
+        alert('El archivo PDF supera los 800 KB. Se recomienda un PDF más liviano para no superar el límite de la base de datos.');
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+      return;
+    }
+
+    const img = new Image();
     const reader = new FileReader();
-    reader.onloadend = () => resolve(reader.result);
+    reader.onload = (e) => {
+      img.src = e.target.result;
+    };
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+
+      if (width > maxWidth || height > maxHeight) {
+        if (width > height) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        } else {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+      resolve(compressedDataUrl);
+    };
+    img.onerror = reject;
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
@@ -75,6 +114,7 @@ const Vehicles = ({ currentUser }) => {
   const [formEntryDate, setFormEntryDate] = useState('');
   const [formImageUrls, setFormImageUrls] = useState([]); // up to 4
   const [formAdmissionPass, setFormAdmissionPass] = useState('');
+  const [formInventoryDoc, setFormInventoryDoc] = useState('');
   const [formBodyworkStatus, setFormBodyworkStatus] = useState('pendiente');
   const [formMechanicsStatus, setFormMechanicsStatus] = useState('pendiente');
   const [formColor, setFormColor] = useState('');
@@ -140,7 +180,7 @@ const Vehicles = ({ currentUser }) => {
     setFormFolio(''); setFormOrderNumber(''); setFormModel('');
     setFormPlate(''); setFormType('Coche'); setFormDetails('');
     setFormEntryDate(new Date().toISOString().slice(0, 16));
-    setFormImageUrls([]); setFormAdmissionPass('');
+    setFormImageUrls([]); setFormAdmissionPass(''); setFormInventoryDoc('');
     setFormBodyworkStatus('pendiente'); setFormMechanicsStatus('pendiente');
     setFormColor(''); setFormInsurance('');
     setFormError('');
@@ -158,6 +198,7 @@ const Vehicles = ({ currentUser }) => {
     setFormDetails(v.details || '');
     setFormImageUrls(v.imageUrls || []);
     setFormAdmissionPass(v.admissionPassUrl || '');
+    setFormInventoryDoc(v.inventoryDocUrl || '');
     setFormBodyworkStatus(v.bodyworkStatus || 'pendiente');
     setFormMechanicsStatus(v.mechanicsStatus || 'pendiente');
     setFormColor(v.color || '');
@@ -182,18 +223,14 @@ const Vehicles = ({ currentUser }) => {
     loadVehicleUpdates(v.folio);
   };
 
-  // ---- Photo Handling (ilimitadas) ----
+  // ---- Photo Handling (compresión automática) ----
   const handleAddPhoto = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
-    const oversized = files.filter(f => f.size > 3 * 1024 * 1024);
-    if (oversized.length) alert(`${oversized.length} imagen(es) superan 3 MB y serán omitidas.`);
-    const valid = files.filter(f => f.size <= 3 * 1024 * 1024);
     try {
-      const b64s = await Promise.all(valid.map(readFileAsBase64));
+      const b64s = await Promise.all(files.map(f => compressFile(f)));
       setFormImageUrls(prev => [...prev, ...b64s]);
-    } catch { alert('Error al cargar imágenes.'); }
-    // Reset input so the same file can be re-selected
+    } catch { alert('Error al procesar imágenes.'); }
     e.target.value = '';
   };
 
@@ -204,11 +241,20 @@ const Vehicles = ({ currentUser }) => {
   const handleAdmissionPassChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { alert('Archivo demasiado grande. Máx 10 MB.'); return; }
     try {
-      const b64 = await readFileAsBase64(file);
+      const b64 = await compressFile(file);
       setFormAdmissionPass(b64);
-    } catch { alert('Error al cargar el pase de admisión.'); }
+    } catch { alert('Error al procesar el pase de admisión.'); }
+    e.target.value = '';
+  };
+
+  const handleInventoryDocChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const b64 = await compressFile(file);
+      setFormInventoryDoc(b64);
+    } catch { alert('Error al procesar el inventario.'); }
     e.target.value = '';
   };
 
@@ -234,6 +280,7 @@ const Vehicles = ({ currentUser }) => {
         details: formDetails.trim(),
         imageUrls: formImageUrls,
         admissionPassUrl: formAdmissionPass,
+        inventoryDocUrl: formInventoryDoc,
         bodyworkStatus: formBodyworkStatus,
         mechanicsStatus: formMechanicsStatus,
         color: formColor.trim(),
@@ -341,11 +388,11 @@ const Vehicles = ({ currentUser }) => {
   const handleEntryPhoto = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 500 * 1024) { alert('Imagen demasiado grande. Máx 500 KB.'); return; }
     try {
-      const b64 = await readFileAsBase64(file);
+      const b64 = await compressFile(file);
       setNewEntryPhotos(prev => [...prev, b64]);
-    } catch { alert('Error al cargar imagen.'); }
+    } catch { alert('Error al procesar la imagen.'); }
+    e.target.value = '';
   };
 
   // ---- Save Ordered Part ----
@@ -472,39 +519,77 @@ const Vehicles = ({ currentUser }) => {
         <p style={{ fontSize: '0.9rem', lineHeight: 1.6 }}>{selectedVehicle.details || 'Sin detalles registrados.'}</p>
       </div>
 
-      {/* Admission Pass */}
-      <div style={{ marginBottom: '1rem' }}>
-        <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pase de Admisión</div>
-        {selectedVehicle.admissionPassUrl ? (
-          selectedVehicle.admissionPassUrl.startsWith('data:application/pdf') ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(15,23,42,0.4)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '1rem' }}>
-              <span style={{ fontSize: '2rem' }}>📄</span>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'white' }}>Pase de Admisión (PDF)</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>Haz clic para abrir el archivo</div>
+      {/* Documents Grid: Admission Pass & Vehicle Inventory */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+        {/* Admission Pass */}
+        <div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pase de Admisión</div>
+          {selectedVehicle.admissionPassUrl ? (
+            selectedVehicle.admissionPassUrl.startsWith('data:application/pdf') ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(15,23,42,0.4)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '0.85rem' }}>
+                <span style={{ fontSize: '1.8rem' }}>📄</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Pase (PDF)</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Abrir documento</div>
+                </div>
+                <a
+                  href={selectedVehicle.admissionPassUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-secondary btn-sm"
+                  style={{ textDecoration: 'none', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <FileText size={13} /><span>PDF</span>
+                </a>
               </div>
-              <a
-                href={selectedVehicle.admissionPassUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-secondary btn-sm"
-                style={{ textDecoration: 'none' }}
-                onClick={e => e.stopPropagation()}
-              >
-                <FileText size={14} /><span>Ver PDF</span>
-              </a>
-            </div>
+            ) : (
+              <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.admissionPassUrl)}>
+                <img src={selectedVehicle.admissionPassUrl} alt="Pase de Admisión" />
+              </div>
+            )
           ) : (
-            <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.admissionPassUrl)}>
-              <img src={selectedVehicle.admissionPassUrl} alt="Pase de Admisión" />
+            <div className="photo-gallery-empty" style={{ height: '80px' }}>
+              <FileText size={20} />
+              <span>Sin pase de admisión</span>
             </div>
-          )
-        ) : (
-          <div className="photo-gallery-empty">
-            <FileText size={24} />
-            <span>Sin pase de admisión</span>
-          </div>
-        )}
+          )}
+        </div>
+
+        {/* Vehicle Inventory Doc */}
+        <div>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Inventario de Recepción</div>
+          {selectedVehicle.inventoryDocUrl ? (
+            selectedVehicle.inventoryDocUrl.startsWith('data:application/pdf') ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(15,23,42,0.4)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '0.85rem' }}>
+                <span style={{ fontSize: '1.8rem' }}>📄</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Inventario (PDF)</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Abrir documento</div>
+                </div>
+                <a
+                  href={selectedVehicle.inventoryDocUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-secondary btn-sm"
+                  style={{ textDecoration: 'none', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  <FileText size={13} /><span>PDF</span>
+                </a>
+              </div>
+            ) : (
+              <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.inventoryDocUrl)}>
+                <img src={selectedVehicle.inventoryDocUrl} alt="Inventario del Vehículo" />
+              </div>
+            )
+          ) : (
+            <div className="photo-gallery-empty" style={{ height: '80px' }}>
+              <FileText size={20} />
+              <span>Sin documento de inventario</span>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="section-divider" />
@@ -1334,53 +1419,103 @@ const Vehicles = ({ currentUser }) => {
                 </label>
               </div>
 
-              {/* Admission Pass — imagen o PDF */}
-              <div className="form-group">
-                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <FileText size={13} /> Pase de Admisión
-                  <span style={{ marginLeft: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(imagen o PDF, máx 10 MB)</span>
-                </label>
-                {formAdmissionPass ? (
-                  <div style={{ position: 'relative', border: '1px solid var(--panel-border)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.3)' }}>
-                    {formAdmissionPass.startsWith('data:application/pdf') ? (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem' }}>
-                        <span style={{ fontSize: '2rem' }}>📄</span>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'white' }}>PDF cargado</div>
-                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>Pase de admisión en formato PDF</div>
-                        </div>
-                        <button type="button" className="btn btn-secondary btn-sm" style={{ fontSize: '0.75rem' }} onClick={() => setFormAdmissionPass('')}>
-                          <X size={13} /><span>Quitar</span>
-                        </button>
-                      </div>
-                    ) : (
-                      <div style={{ position: 'relative', height: '120px' }}>
-                        <img src={formAdmissionPass} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt="Pase" />
-                        <button type="button" style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', color: 'white', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFormAdmissionPass('')}>✕</button>
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <label style={{
-                    display: 'flex', alignItems: 'center', gap: '0.5rem',
-                    cursor: 'pointer', padding: '0.85rem 1rem',
-                    border: '2px dashed var(--panel-border)', borderRadius: '10px',
-                    color: 'var(--text-secondary)', fontSize: '0.85rem',
-                    transition: 'border-color 0.2s, color 0.2s'
-                  }}
-                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'white'; }}
-                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--panel-border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
-                  >
-                    <Upload size={16} />
-                    <span>Cargar pase de admisión (imagen JPG/PNG o archivo PDF)</span>
-                    <input
-                      type="file"
-                      accept="image/*,application/pdf"
-                      style={{ display: 'none' }}
-                      onChange={handleAdmissionPassChange}
-                    />
+              {/* Documents Row: Admission Pass + Inventario */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                {/* Admission Pass — imagen o PDF */}
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <FileText size={13} /> Pase de Admisión
+                    <span style={{ marginLeft: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(PDF/imagen, máx 10 MB)</span>
                   </label>
-                )}
+                  {formAdmissionPass ? (
+                    <div style={{ position: 'relative', border: '1px solid var(--panel-border)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.3)' }}>
+                      {formAdmissionPass.startsWith('data:application/pdf') ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem' }}>
+                          <span style={{ fontSize: '1.5rem' }}>📄</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.8rem', color: 'white' }}>PDF Cargado</div>
+                          </div>
+                          <button type="button" className="btn btn-secondary btn-sm" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} onClick={() => setFormAdmissionPass('')}>
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ position: 'relative', height: '90px' }}>
+                          <img src={formAdmissionPass} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt="Pase" />
+                          <button type="button" style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 20, height: 20, cursor: 'pointer', color: 'white', fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFormAdmissionPass('')}>✕</button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <label style={{
+                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                      cursor: 'pointer', padding: '0.7rem 0.85rem',
+                      border: '2px dashed var(--panel-border)', borderRadius: '10px',
+                      color: 'var(--text-secondary)', fontSize: '0.8rem',
+                      transition: 'border-color 0.2s, color 0.2s'
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'white'; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--panel-border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                    >
+                      <Upload size={15} />
+                      <span>Subir Pase (Imagen/PDF)</span>
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        style={{ display: 'none' }}
+                        onChange={handleAdmissionPassChange}
+                      />
+                    </label>
+                  )}
+                </div>
+
+                {/* Inventario del Vehículo — imagen o PDF */}
+                <div className="form-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <FileText size={13} /> Inventario del Vehículo
+                    <span style={{ marginLeft: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(PDF/imagen, máx 10 MB)</span>
+                  </label>
+                  {formInventoryDoc ? (
+                    <div style={{ position: 'relative', border: '1px solid var(--panel-border)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.3)' }}>
+                      {formInventoryDoc.startsWith('data:application/pdf') ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.75rem' }}>
+                          <span style={{ fontSize: '1.5rem' }}>📄</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.8rem', color: 'white' }}>PDF Cargado</div>
+                          </div>
+                          <button type="button" className="btn btn-secondary btn-sm" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} onClick={() => setFormInventoryDoc('')}>
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ) : (
+                        <div style={{ position: 'relative', height: '90px' }}>
+                          <img src={formInventoryDoc} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt="Inventario" />
+                          <button type="button" style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 20, height: 20, cursor: 'pointer', color: 'white', fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFormInventoryDoc('')}>✕</button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <label style={{
+                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                      cursor: 'pointer', padding: '0.7rem 0.85rem',
+                      border: '2px dashed var(--panel-border)', borderRadius: '10px',
+                      color: 'var(--text-secondary)', fontSize: '0.8rem',
+                      transition: 'border-color 0.2s, color 0.2s'
+                    }}
+                      onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'white'; }}
+                      onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--panel-border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                    >
+                      <Upload size={15} />
+                      <span>Subir Inventario (Imagen/PDF)</span>
+                      <input
+                        type="file"
+                        accept="image/*,application/pdf"
+                        style={{ display: 'none' }}
+                        onChange={handleInventoryDocChange}
+                      />
+                    </label>
+                  )}
+                </div>
               </div>
 
               <div className="modal-footer">
