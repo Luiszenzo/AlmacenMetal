@@ -441,8 +441,7 @@ export const saveVehicle = async (vehicle) => {
     return;
   }
   try {
-    // We use the Folio as the Document ID
-    await setDoc(doc(db, "vehicles", vehicle.folio), {
+    const payload = {
       orderNumber: '',
       model: '',
       imageUrls: [],
@@ -454,9 +453,20 @@ export const saveVehicle = async (vehicle) => {
       deliveredAt: null,
       ...vehicle,
       entryDate: vehicle.entryDate || new Date().toISOString()
-    }, { merge: true });
+    };
+
+    const strSize = JSON.stringify(payload).length;
+    if (strSize > 1024 * 1024) {
+      throw new Error(`El tamaño del vehículo (${(strSize / 1024 / 1024).toFixed(2)} MB) supera el límite de Firestore (1 MB). Intenta subir un PDF de Pase o Inventario más liviano.`);
+    }
+
+    // We use the Folio as the Document ID
+    await setDoc(doc(db, "vehicles", vehicle.folio), payload, { merge: true });
   } catch (e) {
     console.error("Firestore saveVehicle error:", e);
+    if (e.message && (e.message.includes("exceeds the maximum allowed size") || e.message.includes("supera el límite"))) {
+      throw e;
+    }
     useLocalFallback = true;
     await saveVehicle(vehicle);
   }

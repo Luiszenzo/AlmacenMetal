@@ -21,12 +21,12 @@ import { generateVehiclePDF, generateGeneralPDF } from '../utils/reports';
 const PROCESS_LABELS = { pendiente: 'Pendiente', en_proceso: 'En Proceso', terminado: 'Terminado' };
 const PART_STATUS_LABELS = { pendiente: 'Pendiente', pedido: 'Pedido', recibido: 'Recibido' };
 
-// Automatic client-side image compression (down to ~80-120 KB JPEG) to prevent Firestore 1MB limit
-const compressFile = (file, maxWidth = 1024, maxHeight = 1024, quality = 0.65) =>
+// Automatic client-side image compression (down to ~30-40 KB JPEG) to prevent Firestore 1MB limit
+const compressFile = (file, maxWidth = 800, maxHeight = 800, quality = 0.45) =>
   new Promise((resolve, reject) => {
     if (file.type === 'application/pdf') {
-      if (file.size > 800 * 1024) {
-        alert('El archivo PDF supera los 800 KB. Se recomienda un PDF más liviano para no superar el límite de la base de datos.');
+      if (file.size > 700 * 1024) {
+        alert('El archivo PDF supera los 700 KB. Se recomienda un PDF más liviano para no superar el límite de la base de datos.');
       }
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result);
@@ -66,6 +66,42 @@ const compressFile = (file, maxWidth = 1024, maxHeight = 1024, quality = 0.65) =
     img.onerror = reject;
     reader.onerror = reject;
     reader.readAsDataURL(file);
+  });
+
+// Re-compress existing Base64 strings if they exceed ~90 KB
+const recompressBase64 = (base64Str, maxWidth = 800, maxHeight = 800, quality = 0.45) =>
+  new Promise((resolve) => {
+    if (!base64Str || typeof base64Str !== 'string' || !base64Str.startsWith('data:image/')) {
+      resolve(base64Str);
+      return;
+    }
+    if (base64Str.length < 100000) {
+      resolve(base64Str);
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      let width = img.width;
+      let height = img.height;
+      if (width > maxWidth || height > maxHeight) {
+        if (width > height) {
+          height = Math.round((height * maxWidth) / width);
+          width = maxWidth;
+        } else {
+          width = Math.round((width * maxHeight) / height);
+          height = maxHeight;
+        }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    img.onerror = () => resolve(base64Str);
+    img.src = base64Str;
   });
 
 const ProcessStatusSelector = ({ value, onChange, disabled }) => (
@@ -271,6 +307,13 @@ const Vehicles = ({ currentUser }) => {
       return;
     }
     try {
+      // Re-compress any raw or large images before saving to keep payload under Firestore 1MB limit
+      const optimizedImages = await Promise.all(
+        formImageUrls.map(img => recompressBase64(img))
+      );
+      const optimizedAdmission = await recompressBase64(formAdmissionPass);
+      const optimizedInventory = await recompressBase64(formInventoryDoc);
+
       await saveVehicle({
         folio: formFolio.trim().toUpperCase(),
         orderNumber: formOrderNumber.trim().toUpperCase(),
@@ -278,9 +321,9 @@ const Vehicles = ({ currentUser }) => {
         plate: formPlate.trim().toUpperCase(),
         type: formType,
         details: formDetails.trim(),
-        imageUrls: formImageUrls,
-        admissionPassUrl: formAdmissionPass,
-        inventoryDocUrl: formInventoryDoc,
+        imageUrls: optimizedImages,
+        admissionPassUrl: optimizedAdmission,
+        inventoryDocUrl: optimizedInventory,
         bodyworkStatus: formBodyworkStatus,
         mechanicsStatus: formMechanicsStatus,
         color: formColor.trim(),
