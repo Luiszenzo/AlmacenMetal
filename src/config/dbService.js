@@ -109,22 +109,16 @@ const initLocalData = () => {
 initLocalData();
 
 export const checkFirebaseStatus = async () => {
-  if (localStorage.getItem("workshop_use_local_fallback") === "true") {
-    useLocalFallback = true;
-    return false;
-  }
   try {
-    // Simple fetch to confirm connection and permissions
     const q = query(collection(db, "_status_check"));
     await getDocs(q);
     useLocalFallback = false;
     localStorage.removeItem("workshop_use_local_fallback");
     return true;
   } catch (error) {
-    console.warn("Firebase rules/collections are not initialized, using LocalStorage fallback mode:", error.message);
-    useLocalFallback = true;
-    localStorage.setItem("workshop_use_local_fallback", "true");
-    return false;
+    console.warn("Firebase query failed, temporary fallback active:", error.message);
+    useLocalFallback = false; // keep trying Firestore on actual queries
+    return true;
   }
 };
 

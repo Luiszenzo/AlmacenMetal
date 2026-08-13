@@ -34,12 +34,12 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Fetch resources with Cache-First strategy fallback to network
+// Fetch resources with Network-First strategy fallback to cache
 self.addEventListener("fetch", (event) => {
-  // Only cache GET requests
+  // Only handle GET requests
   if (event.request.method !== "GET") return;
 
-  // Bypassing API calls or Firebase queries (let Firebase handle its own offline persistence)
+  // Bypassing API calls or Firebase queries (let Firebase handle its own live queries)
   if (
     event.request.url.includes("firestore.googleapis.com") ||
     event.request.url.includes("identitytoolkit.googleapis.com")
@@ -48,31 +48,26 @@ self.addEventListener("fetch", (event) => {
   }
 
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      
-      return fetch(event.request)
-        .then((networkResponse) => {
-          // Put static files dynamically into cache
-          if (
-            networkResponse.status === 200 &&
-            event.request.url.startsWith(self.location.origin)
-          ) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
-          }
-          return networkResponse;
-        })
-        .catch(() => {
-          // If offline and request is document, return cached index
-          if (event.request.headers.get("accept").includes("text/html")) {
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (
+          networkResponse.status === 200 &&
+          event.request.url.startsWith(self.location.origin)
+        ) {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+        }
+        return networkResponse;
+      })
+      .catch(() => {
+        return caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          if (event.request.headers.get("accept")?.includes("text/html")) {
             return caches.match("/index.html");
           }
         });
-    })
+      })
   );
 });

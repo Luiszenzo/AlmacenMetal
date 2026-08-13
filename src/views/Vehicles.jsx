@@ -105,6 +105,26 @@ const recompressBase64 = (base64Str, maxWidth = 800, maxHeight = 800, quality = 
 // Helper to estimate storage size in KB of a base64 string
 const getStorageKB = (str) => (!str ? 0 : Math.round((str.length * 0.75) / 1024));
 
+// Reliable PDF viewer helper (converts Base64 to Blob URL to bypass browser top-frame security blocks)
+const openPdfBase64 = (base64Data) => {
+  try {
+    if (!base64Data) return;
+    const base64Str = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+    const byteCharacters = atob(base64Str);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], { type: 'application/pdf' });
+    const blobUrl = URL.createObjectURL(blob);
+    window.open(blobUrl, '_blank');
+  } catch (err) {
+    console.error("Error al abrir PDF:", err);
+    alert("Error al abrir el PDF. Comprueba el archivo.");
+  }
+};
+
 const ProcessStatusSelector = ({ value, onChange, disabled }) => (
   <div className="process-status-selector">
     {['pendiente', 'en_proceso', 'terminado'].map(s => (
@@ -606,23 +626,24 @@ const Vehicles = ({ currentUser }) => {
         <div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pase de Admisión</div>
           {selectedVehicle.admissionPassUrl ? (
-            selectedVehicle.admissionPassUrl.startsWith('data:application/pdf') ? (
+            selectedVehicle.admissionPassUrl.includes('application/pdf') ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(15,23,42,0.4)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '0.85rem' }}>
                 <span style={{ fontSize: '1.8rem' }}>📄</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Pase (PDF)</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Abrir documento</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Pase de Admisión (PDF)</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Haz clic para ver documento</div>
                 </div>
-                <a
-                  href={selectedVehicle.admissionPassUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
                   className="btn btn-secondary btn-sm"
-                  style={{ textDecoration: 'none', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                  onClick={e => e.stopPropagation()}
+                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    openPdfBase64(selectedVehicle.admissionPassUrl);
+                  }}
                 >
-                  <FileText size={13} /><span>PDF</span>
-                </a>
+                  <FileText size={13} /><span>Ver PDF</span>
+                </button>
               </div>
             ) : (
               <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.admissionPassUrl)}>
@@ -641,23 +662,24 @@ const Vehicles = ({ currentUser }) => {
         <div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Inventario de Recepción</div>
           {selectedVehicle.inventoryDocUrl ? (
-            selectedVehicle.inventoryDocUrl.startsWith('data:application/pdf') ? (
+            selectedVehicle.inventoryDocUrl.includes('application/pdf') ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', background: 'rgba(15,23,42,0.4)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '0.85rem' }}>
                 <span style={{ fontSize: '1.8rem' }}>📄</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'white', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Inventario (PDF)</div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Abrir documento</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Haz clic para ver documento</div>
                 </div>
-                <a
-                  href={selectedVehicle.inventoryDocUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  type="button"
                   className="btn btn-secondary btn-sm"
-                  style={{ textDecoration: 'none', padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
-                  onClick={e => e.stopPropagation()}
+                  style={{ padding: '0.3rem 0.6rem', fontSize: '0.75rem' }}
+                  onClick={e => {
+                    e.stopPropagation();
+                    openPdfBase64(selectedVehicle.inventoryDocUrl);
+                  }}
                 >
-                  <FileText size={13} /><span>PDF</span>
-                </a>
+                  <FileText size={13} /><span>Ver PDF</span>
+                </button>
               </div>
             ) : (
               <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.inventoryDocUrl)}>
