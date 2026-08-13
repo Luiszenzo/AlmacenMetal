@@ -230,14 +230,31 @@ export const createNewUser = async (name, email, password, role) => {
   if (useLocalFallback) {
     console.log("💾 [DB SERVICE] Guardando usuario localmente en LocalStorage...", { name, email, role });
     const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
-    if (localUsers.find(u => u.email === email)) {
+    if (email && localUsers.find(u => u.email === email)) {
       throw new Error("El correo ya está registrado.");
     }
-    const newUser = { uid: "local_" + Date.now(), email, name, role, password, active: true };
+    const newUser = { uid: "local_" + Date.now(), email: email || null, name, role, password: password || null, active: true };
     localUsers.push(newUser);
     localStorage.setItem("workshop_users", JSON.stringify(localUsers));
     console.log("💾 [DB SERVICE] Usuario guardado localmente con éxito:", newUser);
     return newUser;
+  }
+
+  // Si es técnico (sin email/password), solo guardarlo en Firestore sin crear cuenta Auth
+  if (!email) {
+    try {
+      console.log("☁️ [DB SERVICE] Registrando técnico sin cuenta Auth en Firestore...", { name, role });
+      const uid = "tecnico_" + Date.now();
+      const newUser = { uid, email: null, name, role, active: true };
+      await setDoc(doc(db, "users", uid), newUser);
+      console.log("☁️ [DB SERVICE] Técnico registrado con éxito en Firestore:", newUser);
+      return newUser;
+    } catch (e) {
+      console.error("❌ [DB SERVICE] Error al registrar técnico en Firestore:", e.message);
+      useLocalFallback = true;
+      localStorage.setItem("workshop_use_local_fallback", "true");
+      return createNewUser(name, null, null, role);
+    }
   }
   
   try {

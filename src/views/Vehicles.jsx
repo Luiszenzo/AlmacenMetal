@@ -77,6 +77,8 @@ const Vehicles = ({ currentUser }) => {
   const [formAdmissionPass, setFormAdmissionPass] = useState('');
   const [formBodyworkStatus, setFormBodyworkStatus] = useState('pendiente');
   const [formMechanicsStatus, setFormMechanicsStatus] = useState('pendiente');
+  const [formColor, setFormColor] = useState('');
+  const [formInsurance, setFormInsurance] = useState('');
   const [formError, setFormError] = useState('');
 
   // Detail tab states
@@ -136,6 +138,7 @@ const Vehicles = ({ currentUser }) => {
     setFormEntryDate(new Date().toISOString().slice(0, 16));
     setFormImageUrls([]); setFormAdmissionPass('');
     setFormBodyworkStatus('pendiente'); setFormMechanicsStatus('pendiente');
+    setFormColor(''); setFormInsurance('');
     setFormError('');
     setShowAddModal(true);
   };
@@ -153,6 +156,8 @@ const Vehicles = ({ currentUser }) => {
     setFormAdmissionPass(v.admissionPassUrl || '');
     setFormBodyworkStatus(v.bodyworkStatus || 'pendiente');
     setFormMechanicsStatus(v.mechanicsStatus || 'pendiente');
+    setFormColor(v.color || '');
+    setFormInsurance(v.insurance || '');
     const dateObj = new Date(v.entryDate);
     const tzOffset = dateObj.getTimezoneOffset() * 60000;
     setFormEntryDate(new Date(dateObj.getTime() - tzOffset).toISOString().slice(0, 16));
@@ -224,6 +229,8 @@ const Vehicles = ({ currentUser }) => {
         admissionPassUrl: formAdmissionPass,
         bodyworkStatus: formBodyworkStatus,
         mechanicsStatus: formMechanicsStatus,
+        color: formColor.trim(),
+        insurance: formInsurance.trim(),
         entryDate: new Date(formEntryDate).toISOString(),
         active: isEditMode ? (vehicles.find(v => v.folio === formFolio.trim().toUpperCase())?.active ?? true) : true,
         deliveredAt: null
@@ -423,6 +430,8 @@ const Vehicles = ({ currentUser }) => {
         <div><span style={{ color: 'var(--text-secondary)' }}>Modelo:</span> <strong>{selectedVehicle.model || '—'}</strong></div>
         <div><span style={{ color: 'var(--text-secondary)' }}>Placa:</span> <strong style={{ fontFamily: 'monospace' }}>{selectedVehicle.plate}</strong></div>
         <div><span style={{ color: 'var(--text-secondary)' }}>Tipo:</span> <strong>{selectedVehicle.type}</strong></div>
+        <div><span style={{ color: 'var(--text-secondary)' }}>Color:</span> <strong>{selectedVehicle.color || '—'}</strong></div>
+        <div><span style={{ color: 'var(--text-secondary)' }}>Aseguradora:</span> <strong>{selectedVehicle.insurance || '—'}</strong></div>
         <div><span style={{ color: 'var(--text-secondary)' }}>Entrada:</span> <strong>{new Date(selectedVehicle.entryDate).toLocaleDateString('es-MX')}</strong></div>
         {selectedVehicle.deliveredAt && (
           <div><span style={{ color: 'var(--text-secondary)' }}>Entregado:</span> <strong style={{ color: '#34d399' }}>{new Date(selectedVehicle.deliveredAt).toLocaleDateString('es-MX')}</strong></div>
@@ -1059,6 +1068,26 @@ const Vehicles = ({ currentUser }) => {
                   <input
                     type="datetime-local" className="input-field" value={formEntryDate}
                     onChange={e => setFormEntryDate(e.target.value)} required
+                  />
+                </div>
+              </div>
+
+              {/* Row 4: Color + Insurance */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                <div className="form-group">
+                  <label>Color del Vehículo</label>
+                  <input
+                    type="text" className="input-field" value={formColor}
+                    onChange={e => setFormColor(e.target.value)}
+                    placeholder="ej. Rojo, Blanco perla, Gris"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Aseguradora</label>
+                  <input
+                    type="text" className="input-field" value={formInsurance}
+                    onChange={e => setFormInsurance(e.target.value)}
+                    placeholder="ej. GNP, AXA, Qualitas"
                   />
                 </div>
               </div>

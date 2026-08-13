@@ -29,18 +29,20 @@ const Users = ({ currentUser }) => {
     loadUsers();
   }, []);
 
+  const isTecnico = role === 'tecnico';
+
   const handleRegister = async (e) => {
     e.preventDefault();
     setError('');
     setSuccess('');
 
-    if (password.length < 6) {
+    if (!isTecnico && password.length < 6) {
       setError('La contraseña debe tener al menos 6 caracteres.');
       return;
     }
 
     try {
-      await createNewUser(name, email, password, role);
+      await createNewUser(name, isTecnico ? null : email, isTecnico ? null : password, role);
       setSuccess('Usuario registrado exitosamente.');
       setName('');
       setEmail('');
@@ -161,30 +163,6 @@ const Users = ({ currentUser }) => {
               </div>
 
               <div className="form-group">
-                <label>Correo Electrónico</label>
-                <input 
-                  type="email" 
-                  className="input-field" 
-                  value={email} 
-                  onChange={(e) => setEmail(e.target.value)} 
-                  placeholder="ej. pedro@taller.com"
-                  required 
-                />
-              </div>
-
-              <div className="form-group">
-                <label>Contraseña</label>
-                <input 
-                  type="password" 
-                  className="input-field" 
-                  value={password} 
-                  onChange={(e) => setPassword(e.target.value)} 
-                  placeholder="Mínimo 6 caracteres"
-                  required 
-                />
-              </div>
-
-              <div className="form-group">
                 <label>Rol de Usuario</label>
                 <select className="select-field" value={role} onChange={(e) => setRole(e.target.value)}>
                   <option value="tecnico">Técnico (Solo lectura y salidas asignadas)</option>
@@ -192,6 +170,48 @@ const Users = ({ currentUser }) => {
                   <option value="admin">Administrador (Acceso total y gestión de usuarios)</option>
                 </select>
               </div>
+
+              {!isTecnico && (
+                <>
+                  <div className="form-group">
+                    <label>Correo Electrónico</label>
+                    <input 
+                      type="email" 
+                      className="input-field" 
+                      value={email} 
+                      onChange={(e) => setEmail(e.target.value)} 
+                      placeholder="ej. pedro@taller.com"
+                      required 
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label>Contraseña</label>
+                    <input 
+                      type="password" 
+                      className="input-field" 
+                      value={password} 
+                      onChange={(e) => setPassword(e.target.value)} 
+                      placeholder="Mínimo 6 caracteres"
+                      required 
+                    />
+                  </div>
+                </>
+              )}
+
+              {isTecnico && (
+                <div style={{
+                  background: 'rgba(99, 179, 237, 0.1)',
+                  border: '1px solid rgba(99, 179, 237, 0.3)',
+                  borderRadius: '8px',
+                  padding: '0.75rem 1rem',
+                  fontSize: '0.85rem',
+                  color: 'var(--text-secondary)',
+                  marginBottom: '0.5rem'
+                }}>
+                  ℹ️ Los técnicos no tienen acceso de inicio de sesión. Solo aparecerán en listas de asignación.
+                </div>
+              )}
 
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancelar</button>
