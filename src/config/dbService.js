@@ -585,13 +585,12 @@ export const getVehicleUpdates = async (vehicleFolio) => {
   try {
     const q = query(
       collection(db, "vehicle_updates"),
-      where("vehicleFolio", "==", vehicleFolio),
-      orderBy("createdAt", "desc")
+      where("vehicleFolio", "==", vehicleFolio)
     );
     const snapshot = await getDocs(q);
     const list = [];
     snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
-    return list;
+    return list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   } catch (e) {
     console.error("Firestore getVehicleUpdates error:", e);
     useLocalFallback = true;

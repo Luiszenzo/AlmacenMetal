@@ -85,12 +85,16 @@ const Vehicles = ({ currentUser }) => {
   const [vehicleUpdates, setVehicleUpdates] = useState([]);
   const [updatesLoading, setUpdatesLoading] = useState(false);
 
-  // New update form
-  const [newUpdateBodywork, setNewUpdateBodywork] = useState('');
-  const [newUpdateMechanics, setNewUpdateMechanics] = useState('');
-  const [newUpdateGeneral, setNewUpdateGeneral] = useState('');
-  const [newUpdatePhotos, setNewUpdatePhotos] = useState([]);
-  const [savingUpdate, setSavingUpdate] = useState(false);
+  // Bitácora — sistema de carpetas
+  const [showNewFolderForm, setShowNewFolderForm] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [newFolderDesc, setNewFolderDesc] = useState('');
+  const [expandedFolderId, setExpandedFolderId] = useState(null);
+  const [showNewEntryFolderId, setShowNewEntryFolderId] = useState(null);
+  const [newEntryNote, setNewEntryNote] = useState('');
+  const [newEntryPhotos, setNewEntryPhotos] = useState([]);
+  const [savingFolder, setSavingFolder] = useState(false);
+  const [savingEntry, setSavingEntry] = useState(false);
 
   // Ordered parts
   const [showAddPartForm, setShowAddPartForm] = useState(false);
@@ -169,40 +173,43 @@ const Vehicles = ({ currentUser }) => {
     setSelectedVehicle(v);
     setActiveTab('info');
     setVehicleUpdates([]);
-    setNewUpdateBodywork(''); setNewUpdateMechanics('');
-    setNewUpdateGeneral(''); setNewUpdatePhotos([]);
+    setShowNewFolderForm(false);
+    setNewFolderName(''); setNewFolderDesc('');
+    setExpandedFolderId(null); setShowNewEntryFolderId(null);
+    setNewEntryNote(''); setNewEntryPhotos([]);
     setShowAddPartForm(false);
     setShowDetailModal(true);
     loadVehicleUpdates(v.folio);
   };
 
-  // ---- Photo Handling ----
-  const handleAddPhoto = async (e, index) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > 500 * 1024) { alert('Imagen demasiado grande. Máx 500 KB por foto.'); return; }
+  // ---- Photo Handling (ilimitadas) ----
+  const handleAddPhoto = async (e) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    const oversized = files.filter(f => f.size > 3 * 1024 * 1024);
+    if (oversized.length) alert(`${oversized.length} imagen(es) superan 3 MB y serán omitidas.`);
+    const valid = files.filter(f => f.size <= 3 * 1024 * 1024);
     try {
-      const b64 = await readFileAsBase64(file);
-      const updated = [...formImageUrls];
-      updated[index] = b64;
-      setFormImageUrls(updated);
-    } catch { alert('Error al cargar la imagen.'); }
+      const b64s = await Promise.all(valid.map(readFileAsBase64));
+      setFormImageUrls(prev => [...prev, ...b64s]);
+    } catch { alert('Error al cargar imágenes.'); }
+    // Reset input so the same file can be re-selected
+    e.target.value = '';
   };
 
   const handleRemovePhoto = (index) => {
-    const updated = [...formImageUrls];
-    updated.splice(index, 1);
-    setFormImageUrls(updated);
+    setFormImageUrls(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleAdmissionPassChange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 600 * 1024) { alert('Imagen demasiado grande. Máx 600 KB.'); return; }
+    if (file.size > 10 * 1024 * 1024) { alert('Archivo demasiado grande. Máx 10 MB.'); return; }
     try {
       const b64 = await readFileAsBase64(file);
       setFormAdmissionPass(b64);
     } catch { alert('Error al cargar el pase de admisión.'); }
+    e.target.value = '';
   };
 
   // ---- Submit Form ----
@@ -283,42 +290,61 @@ const Vehicles = ({ currentUser }) => {
     } catch (err) { console.error(err); }
   };
 
-  // ---- Save Daily Update ----
-  const handleSaveUpdate = async () => {
-    if (!newUpdateGeneral.trim() && !newUpdateBodywork.trim() && !newUpdateMechanics.trim()) {
-      alert('Escribe al menos una nota para guardar la actualización.');
-      return;
-    }
-    setSavingUpdate(true);
+  // ---- Bitácora: Guardar Carpeta ----
+  const handleSaveFolder = async () => {
+    if (!newFolderName.trim()) { alert('Escribe el nombre de la carpeta.'); return; }
+    setSavingFolder(true);
     try {
-      await saveVehicleUpdate({
+      const saved = await saveVehicleUpdate({
         vehicleFolio: selectedVehicle.folio,
-        date: new Date().toISOString(),
-        technicianName: currentUser?.name || 'Usuario',
-        bodyworkNote: newUpdateBodywork.trim(),
-        mechanicsNote: newUpdateMechanics.trim(),
-        generalNote: newUpdateGeneral.trim(),
-        photosAdded: newUpdatePhotos
+        type: 'folder',
+        name: newFolderName.trim(),
+        description: newFolderDesc.trim(),
+        createdBy: currentUser?.name || 'Usuario',
       });
-      setNewUpdateBodywork('');
-      setNewUpdateMechanics('');
-      setNewUpdateGeneral('');
-      setNewUpdatePhotos([]);
+      setNewFolderName('');
+      setNewFolderDesc('');
+      setShowNewFolderForm(false);
+      setExpandedFolderId(saved?.id || null);
       await loadVehicleUpdates(selectedVehicle.folio);
     } catch (err) {
-      alert('Error al guardar actualización: ' + err.message);
+      alert('Error al crear carpeta: ' + err.message);
     } finally {
-      setSavingUpdate(false);
+      setSavingFolder(false);
     }
   };
 
-  const handleUpdatePhoto = async (e) => {
+  // ---- Bitácora: Guardar Entrada en Carpeta ----
+  const handleSaveEntry = async (folderId) => {
+    if (!newEntryNote.trim()) { alert('Escribe una nota para la entrada.'); return; }
+    setSavingEntry(true);
+    try {
+      await saveVehicleUpdate({
+        vehicleFolio: selectedVehicle.folio,
+        type: 'entry',
+        folderId,
+        note: newEntryNote.trim(),
+        photos: newEntryPhotos,
+        createdBy: currentUser?.name || 'Usuario',
+      });
+      setNewEntryNote('');
+      setNewEntryPhotos([]);
+      setShowNewEntryFolderId(null);
+      await loadVehicleUpdates(selectedVehicle.folio);
+    } catch (err) {
+      alert('Error al guardar entrada: ' + err.message);
+    } finally {
+      setSavingEntry(false);
+    }
+  };
+
+  const handleEntryPhoto = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     if (file.size > 500 * 1024) { alert('Imagen demasiado grande. Máx 500 KB.'); return; }
     try {
       const b64 = await readFileAsBase64(file);
-      setNewUpdatePhotos(prev => [...prev, b64]);
+      setNewEntryPhotos(prev => [...prev, b64]);
     } catch { alert('Error al cargar imagen.'); }
   };
 
@@ -391,10 +417,12 @@ const Vehicles = ({ currentUser }) => {
   const getVehicleTotalCost = (folio) =>
     getVehicleOutgoings(folio).reduce((acc, o) => acc + ((o.costPerUnit || 0) * (o.quantity || 0) * 1.16), 0);
 
-  const handleReportVehicle = (v) => {
+  const handleReportVehicle = async (v) => {
     const vOutgoings = outgoings.filter(o => o.vehicleFolio === v.folio);
     const totalCost = vOutgoings.reduce((acc, o) => acc + ((o.costPerUnit || 0) * (o.quantity || 0)), 0);
-    generateVehiclePDF(v, vOutgoings, totalCost);
+    let updates = [];
+    try { updates = await getVehicleUpdates(v.folio); } catch (e) { /* continuar sin bitácora */ }
+    generateVehiclePDF(v, vOutgoings, totalCost, updates);
   };
 
   const handleReportGeneral = () => generateGeneralPDF(vehicles, outgoings);
@@ -448,9 +476,29 @@ const Vehicles = ({ currentUser }) => {
       <div style={{ marginBottom: '1rem' }}>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Pase de Admisión</div>
         {selectedVehicle.admissionPassUrl ? (
-          <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.admissionPassUrl)}>
-            <img src={selectedVehicle.admissionPassUrl} alt="Pase de Admisión" />
-          </div>
+          selectedVehicle.admissionPassUrl.startsWith('data:application/pdf') ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', background: 'rgba(15,23,42,0.4)', border: '1px solid var(--panel-border)', borderRadius: '10px', padding: '1rem' }}>
+              <span style={{ fontSize: '2rem' }}>📄</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'white' }}>Pase de Admisión (PDF)</div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>Haz clic para abrir el archivo</div>
+              </div>
+              <a
+                href={selectedVehicle.admissionPassUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="btn btn-secondary btn-sm"
+                style={{ textDecoration: 'none' }}
+                onClick={e => e.stopPropagation()}
+              >
+                <FileText size={14} /><span>Ver PDF</span>
+              </a>
+            </div>
+          ) : (
+            <div className="admission-pass-box" onClick={() => setLightboxSrc(selectedVehicle.admissionPassUrl)}>
+              <img src={selectedVehicle.admissionPassUrl} alt="Pase de Admisión" />
+            </div>
+          )
         ) : (
           <div className="photo-gallery-empty">
             <FileText size={24} />
@@ -703,133 +751,258 @@ const Vehicles = ({ currentUser }) => {
     );
   };
 
-  const renderBitacoraTab = () => (
-    <div>
-      {/* Add Update Form */}
-      {isEditable && (
-        <div className="add-update-form">
-          <div className="add-update-form-title">
-            <PlusCircle size={16} />
-            Agregar Actualización de Hoy — {new Date().toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-          </div>
-          <div className="form-group">
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><Hammer size={13} /> Nota de Hojalatería</label>
-            <textarea
-              className="input-field"
-              rows={2}
-              value={newUpdateBodywork}
-              onChange={e => setNewUpdateBodywork(e.target.value)}
-              placeholder="¿Qué se trabajó hoy en hojalatería?"
-            />
-          </div>
-          <div className="form-group">
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><Cog size={13} /> Nota de Mecánica</label>
-            <textarea
-              className="input-field"
-              rows={2}
-              value={newUpdateMechanics}
-              onChange={e => setNewUpdateMechanics(e.target.value)}
-              placeholder="¿Qué se trabajó hoy en mecánica?"
-            />
-          </div>
-          <div className="form-group">
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}><BookOpen size={13} /> Nota General</label>
-            <textarea
-              className="input-field"
-              rows={2}
-              value={newUpdateGeneral}
-              onChange={e => setNewUpdateGeneral(e.target.value)}
-              placeholder="Notas generales del día (observaciones, pendientes, etc.)"
-            />
-          </div>
-          {/* Update photos */}
-          {newUpdatePhotos.length > 0 && (
-            <div className="photo-gallery" style={{ marginBottom: '0.75rem' }}>
-              {newUpdatePhotos.map((url, i) => (
-                <div key={i} className="photo-gallery-item" style={{ position: 'relative' }}>
-                  <img src={url} alt="" />
-                  <button
-                    style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 20, height: 20, cursor: 'pointer', color: 'white', fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    onClick={() => setNewUpdatePhotos(p => p.filter((_, j) => j !== i))}
-                  >✕</button>
-                </div>
-              ))}
-            </div>
-          )}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
-            <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)', border: '1px dashed var(--panel-border)', borderRadius: '8px', padding: '0.4rem 0.75rem' }}>
-              <Camera size={14} />
-              <span>Agregar foto del progreso</span>
-              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleUpdatePhoto} />
-            </label>
-            <button className="btn btn-primary btn-sm" onClick={handleSaveUpdate} disabled={savingUpdate}>
-              <Save size={14} />
-              <span>{savingUpdate ? 'Guardando...' : 'Guardar Actualización'}</span>
-            </button>
-          </div>
-        </div>
-      )}
+  const renderBitacoraTab = () => {
+    const folders = vehicleUpdates.filter(u => u.type === 'folder')
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    const entries = vehicleUpdates.filter(u => u.type === 'entry');
+    const legacyEntries = vehicleUpdates.filter(u => !u.type);
+    const isEmpty = folders.length === 0 && legacyEntries.length === 0;
 
-      {/* Timeline */}
-      {updatesLoading ? (
-        <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Cargando bitácora...</div>
-      ) : vehicleUpdates.length === 0 ? (
-        <div style={{ background: 'rgba(15,23,42,0.3)', borderRadius: '10px', padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', border: '1px solid var(--panel-border)' }}>
-          <BookOpen size={32} style={{ marginBottom: '0.5rem', opacity: 0.4 }} />
-          <p style={{ fontSize: '0.9rem' }}>No hay registros en la bitácora aún.</p>
-          <p style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>Agrega la primera actualización del día.</p>
+    return (
+      <div>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+          <h4 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <BookOpen size={16} style={{ color: 'var(--primary)' }} />
+            Bitácora de Trabajo
+          </h4>
+          {isEditable && (
+            <button
+              className={`btn btn-sm ${showNewFolderForm ? 'btn-secondary' : 'btn-primary'}`}
+              onClick={() => setShowNewFolderForm(p => !p)}
+            >
+              <PlusCircle size={14} />
+              <span>{showNewFolderForm ? 'Cancelar' : 'Nueva Carpeta'}</span>
+            </button>
+          )}
         </div>
-      ) : (
-        <div className="timeline">
-          {vehicleUpdates.map(u => (
-            <div key={u.id} className="timeline-item">
-              <div className="timeline-dot" />
-              <div className="timeline-card">
-                <div className="timeline-header">
-                  <span className="timeline-date">
-                    {new Date(u.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
-                    {' — '}
-                    {new Date(u.createdAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
-                  </span>
-                  <span className="timeline-author">{u.technicianName}</span>
+
+        {/* New Folder Form */}
+        {showNewFolderForm && (
+          <div className="add-update-form" style={{ marginBottom: '1rem' }}>
+            <div className="add-update-form-title"><PlusCircle size={15} /> Nueva Carpeta de Bitácora</div>
+            <div className="form-group">
+              <label>Nombre de la Carpeta *</label>
+              <input
+                className="input-field"
+                value={newFolderName}
+                onChange={e => setNewFolderName(e.target.value)}
+                placeholder="ej. Hojalatería, Mecánica, Pintura, Eléctrico..."
+              />
+            </div>
+            <div className="form-group">
+              <label>Descripción</label>
+              <textarea
+                className="input-field"
+                rows={2}
+                value={newFolderDesc}
+                onChange={e => setNewFolderDesc(e.target.value)}
+                placeholder="Describe el trabajo o área de esta carpeta..."
+              />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-primary btn-sm" onClick={handleSaveFolder} disabled={savingFolder}>
+                <Save size={14} />
+                <span>{savingFolder ? 'Creando...' : 'Crear Carpeta'}</span>
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Loading */}
+        {updatesLoading ? (
+          <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>Cargando bitácora...</div>
+        ) : isEmpty ? (
+          <div style={{ background: 'rgba(15,23,42,0.3)', borderRadius: '12px', padding: '2.5rem', textAlign: 'center', color: 'var(--text-secondary)', border: '1px solid var(--panel-border)' }}>
+            <BookOpen size={36} style={{ marginBottom: '0.75rem', opacity: 0.3 }} />
+            <p style={{ fontSize: '0.95rem', fontWeight: 500 }}>Sin carpetas en la bitácora.</p>
+            <p style={{ fontSize: '0.82rem', marginTop: '0.25rem' }}>Crea una carpeta para comenzar a registrar el trabajo diario.</p>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+
+            {/* Carpetas */}
+            {folders.map(folder => {
+              const folderEntries = entries
+                .filter(e => e.folderId === folder.id)
+                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+              const isExpanded = expandedFolderId === folder.id;
+              const isAddingEntry = showNewEntryFolderId === folder.id;
+
+              return (
+                <div key={folder.id} style={{
+                  background: 'rgba(15,23,42,0.45)',
+                  border: `1px solid ${isExpanded ? 'rgba(99,179,237,0.4)' : 'var(--panel-border)'}`,
+                  borderRadius: '12px',
+                  overflow: 'hidden',
+                  transition: 'border-color 0.2s'
+                }}>
+                  {/* Folder Header */}
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.875rem 1rem', cursor: 'pointer', userSelect: 'none', background: isExpanded ? 'rgba(99,179,237,0.06)' : 'transparent' }}
+                    onClick={() => setExpandedFolderId(isExpanded ? null : folder.id)}
+                  >
+                    <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>{isExpanded ? '📂' : '📁'}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'white' }}>{folder.name}</div>
+                      {folder.description && (
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.15rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {folder.description}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                      <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', borderRadius: '20px', padding: '0.15rem 0.5rem' }}>
+                        {folderEntries.length} {folderEntries.length === 1 ? 'entrada' : 'entradas'}
+                      </span>
+                      {isEditable && (
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ padding: '0.2rem 0.55rem', fontSize: '0.75rem' }}
+                          onClick={e => {
+                            e.stopPropagation();
+                            setShowNewEntryFolderId(isAddingEntry ? null : folder.id);
+                            setExpandedFolderId(folder.id);
+                            setNewEntryNote('');
+                            setNewEntryPhotos([]);
+                          }}
+                        >
+                          <PlusCircle size={12} /><span>{isAddingEntry ? 'Cancelar' : '+ Entrada'}</span>
+                        </button>
+                      )}
+                      <ChevronRight size={16} style={{ color: 'var(--text-secondary)', transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
+                    </div>
+                  </div>
+
+                  {/* Folder Body */}
+                  {isExpanded && (
+                    <div style={{ borderTop: '1px solid var(--panel-border)', padding: '1rem' }}>
+
+                      {/* Add Entry Form */}
+                      {isAddingEntry && (
+                        <div className="add-update-form" style={{ marginBottom: '1rem' }}>
+                          <div className="add-update-form-title" style={{ fontSize: '0.82rem' }}>
+                            <Clock size={13} /> Nuevo cambio en "{folder.name}" — {new Date().toLocaleDateString('es-MX')}
+                          </div>
+                          <div className="form-group">
+                            <label>Descripción del cambio / avance *</label>
+                            <textarea
+                              className="input-field"
+                              rows={3}
+                              value={newEntryNote}
+                              onChange={e => setNewEntryNote(e.target.value)}
+                              placeholder="Describe el trabajo realizado..."
+                            />
+                          </div>
+                          {newEntryPhotos.length > 0 && (
+                            <div className="photo-gallery" style={{ marginBottom: '0.75rem' }}>
+                              {newEntryPhotos.map((url, i) => (
+                                <div key={i} className="photo-gallery-item" style={{ position: 'relative' }}>
+                                  <img src={url} alt="" />
+                                  <button
+                                    style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 20, height: 20, cursor: 'pointer', color: 'white', fontSize: '0.65rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                    onClick={() => setNewEntryPhotos(p => p.filter((_, j) => j !== i))}
+                                  >✕</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem' }}>
+                            <label style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--text-secondary)', border: '1px dashed var(--panel-border)', borderRadius: '8px', padding: '0.4rem 0.75rem' }}>
+                              <Camera size={14} />
+                              <span>Foto</span>
+                              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={handleEntryPhoto} />
+                            </label>
+                            <button className="btn btn-primary btn-sm" onClick={() => handleSaveEntry(folder.id)} disabled={savingEntry}>
+                              <Save size={14} />
+                              <span>{savingEntry ? 'Guardando...' : 'Guardar Entrada'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Entry Timeline */}
+                      {folderEntries.length === 0 ? (
+                        <div style={{ textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '1rem 0' }}>
+                          Sin entradas aún. Usa el botón "+ Entrada" para registrar cambios.
+                        </div>
+                      ) : (
+                        <div className="timeline">
+                          {folderEntries.map(entry => (
+                            <div key={entry.id} className="timeline-item">
+                              <div className="timeline-dot" />
+                              <div className="timeline-card">
+                                <div className="timeline-header">
+                                  <span className="timeline-date">
+                                    {new Date(entry.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                                    {' — '}
+                                    {new Date(entry.createdAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                  <span className="timeline-author">{entry.createdBy}</span>
+                                </div>
+                                <p style={{ fontSize: '0.9rem', lineHeight: 1.65, marginTop: '0.25rem' }}>{entry.note}</p>
+                                {(entry.photos || []).length > 0 && (
+                                  <div className="photo-gallery" style={{ marginTop: '0.75rem' }}>
+                                    {(entry.photos || []).map((url, i) => (
+                                      <div key={i} className="photo-gallery-item" onClick={() => setLightboxSrc(url)}>
+                                        <img src={url} alt="" />
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-                <div className="timeline-notes">
-                  {u.bodyworkNote && (
-                    <div className="timeline-note-row">
-                      <span className="timeline-note-label"><Hammer size={11} style={{ display: 'inline', marginRight: 3 }} />Hojalatería:</span>
-                      <span className="timeline-note-text">{u.bodyworkNote}</span>
-                    </div>
-                  )}
-                  {u.mechanicsNote && (
-                    <div className="timeline-note-row">
-                      <span className="timeline-note-label"><Cog size={11} style={{ display: 'inline', marginRight: 3 }} />Mecánica:</span>
-                      <span className="timeline-note-text">{u.mechanicsNote}</span>
-                    </div>
-                  )}
-                  {u.generalNote && (
-                    <div className="timeline-note-row">
-                      <span className="timeline-note-label"><BookOpen size={11} style={{ display: 'inline', marginRight: 3 }} />General:</span>
-                      <span className="timeline-note-text">{u.generalNote}</span>
-                    </div>
-                  )}
+              );
+            })}
+
+            {/* Registros Anteriores (formato legacy) */}
+            {legacyEntries.length > 0 && (
+              <div style={{ background: 'rgba(15,23,42,0.3)', border: '1px solid var(--panel-border)', borderRadius: '12px', overflow: 'hidden' }}>
+                <div style={{ padding: '0.75rem 1rem', borderBottom: '1px solid var(--panel-border)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span>📋</span>
+                  <span style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text-secondary)' }}>Registros Anteriores</span>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', borderRadius: '20px', padding: '0.1rem 0.45rem' }}>{legacyEntries.length}</span>
                 </div>
-                {/* Progress photos */}
-                {(u.photosAdded || []).length > 0 && (
-                  <div className="photo-gallery" style={{ marginTop: '0.75rem' }}>
-                    {(u.photosAdded || []).map((url, i) => (
-                      <div key={i} className="photo-gallery-item" onClick={() => setLightboxSrc(url)}>
-                        <img src={url} alt="" />
+                <div style={{ padding: '1rem' }}>
+                  <div className="timeline">
+                    {legacyEntries.map(u => (
+                      <div key={u.id} className="timeline-item">
+                        <div className="timeline-dot" />
+                        <div className="timeline-card">
+                          <div className="timeline-header">
+                            <span className="timeline-date">{new Date(u.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                            <span className="timeline-author">{u.technicianName}</span>
+                          </div>
+                          <div className="timeline-notes">
+                            {u.bodyworkNote && <div className="timeline-note-row"><span className="timeline-note-label"><Hammer size={11} style={{ display: 'inline', marginRight: 3 }} />Hojalatería:</span><span className="timeline-note-text">{u.bodyworkNote}</span></div>}
+                            {u.mechanicsNote && <div className="timeline-note-row"><span className="timeline-note-label"><Cog size={11} style={{ display: 'inline', marginRight: 3 }} />Mecánica:</span><span className="timeline-note-text">{u.mechanicsNote}</span></div>}
+                            {u.generalNote && <div className="timeline-note-row"><span className="timeline-note-label"><BookOpen size={11} style={{ display: 'inline', marginRight: 3 }} />General:</span><span className="timeline-note-text">{u.generalNote}</span></div>}
+                          </div>
+                          {(u.photosAdded || []).length > 0 && (
+                            <div className="photo-gallery" style={{ marginTop: '0.75rem' }}>
+                              {(u.photosAdded || []).map((url, i) => (
+                                <div key={i} className="photo-gallery-item" onClick={() => setLightboxSrc(url)}><img src={url} alt="" /></div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
-                )}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // ---- Main Render ----
   return (
@@ -1119,50 +1292,95 @@ const Vehicles = ({ currentUser }) => {
                 </div>
               </div>
 
-              {/* Vehicle Photos — 4 slots */}
+              {/* Vehicle Photos — ilimitadas */}
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <Camera size={13} /> Fotografías del Vehículo (hasta 4)
+                  <Camera size={13} /> Fotografías del Vehículo
+                  <span style={{ marginLeft: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 400 }}>({formImageUrls.length} cargada{formImageUrls.length !== 1 ? 's' : ''})</span>
                 </label>
-                <div className="multi-upload-zone">
-                  {[0, 1, 2, 3].map(i => (
-                    <div key={i} className="upload-slot">
-                      {formImageUrls[i] ? (
-                        <>
-                          <img src={formImageUrls[i]} alt="" />
-                          <button type="button" className="remove-photo" onClick={() => handleRemovePhoto(i)}>✕</button>
-                        </>
-                      ) : (
-                        <>
-                          <Camera size={18} />
-                          <span>Foto {i + 1}</span>
-                          <input type="file" accept="image/*" onChange={e => handleAddPhoto(e, i)} />
-                        </>
-                      )}
-                    </div>
-                  ))}
-                </div>
+
+                {/* Current photos */}
+                {formImageUrls.length > 0 && (
+                  <div className="multi-upload-zone" style={{ marginBottom: '0.75rem' }}>
+                    {formImageUrls.map((url, i) => (
+                      <div key={i} className="upload-slot">
+                        <img src={url} alt="" />
+                        <button type="button" className="remove-photo" onClick={() => handleRemovePhoto(i)}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add photos button */}
+                <label style={{
+                  display: 'flex', alignItems: 'center', gap: '0.5rem',
+                  cursor: 'pointer', padding: '0.6rem 1rem',
+                  border: '2px dashed var(--panel-border)', borderRadius: '10px',
+                  color: 'var(--text-secondary)', fontSize: '0.85rem',
+                  transition: 'border-color 0.2s, color 0.2s'
+                }}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'white'; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--panel-border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                >
+                  <Camera size={16} />
+                  <span>Agregar fotos (puedes seleccionar varias a la vez)</span>
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{ display: 'none' }}
+                    onChange={handleAddPhoto}
+                  />
+                </label>
               </div>
 
-              {/* Admission Pass */}
+              {/* Admission Pass — imagen o PDF */}
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                  <FileText size={13} /> Pase de Admisión (imagen)
+                  <FileText size={13} /> Pase de Admisión
+                  <span style={{ marginLeft: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(imagen o PDF, máx 10 MB)</span>
                 </label>
-                <div className="image-upload-box" style={{ height: '100px' }}>
-                  {formAdmissionPass ? (
-                    <>
-                      <img src={formAdmissionPass} className="image-preview" alt="Pase" style={{ height: '100%', objectFit: 'contain' }} />
-                      <button type="button" style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', color: 'white', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFormAdmissionPass('')}>✕</button>
-                    </>
-                  ) : (
-                    <>
-                      <Upload size={20} />
-                      <span style={{ fontSize: '0.8rem' }}>Pase de admisión (Máx. 600 KB)</span>
-                      <input type="file" accept="image/*" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} onChange={handleAdmissionPassChange} />
-                    </>
-                  )}
-                </div>
+                {formAdmissionPass ? (
+                  <div style={{ position: 'relative', border: '1px solid var(--panel-border)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.3)' }}>
+                    {formAdmissionPass.startsWith('data:application/pdf') ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', padding: '1rem' }}>
+                        <span style={{ fontSize: '2rem' }}>📄</span>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'white' }}>PDF cargado</div>
+                          <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.1rem' }}>Pase de admisión en formato PDF</div>
+                        </div>
+                        <button type="button" className="btn btn-secondary btn-sm" style={{ fontSize: '0.75rem' }} onClick={() => setFormAdmissionPass('')}>
+                          <X size={13} /><span>Quitar</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div style={{ position: 'relative', height: '120px' }}>
+                        <img src={formAdmissionPass} style={{ width: '100%', height: '100%', objectFit: 'contain' }} alt="Pase" />
+                        <button type="button" style={{ position: 'absolute', top: 6, right: 6, background: 'rgba(239,68,68,0.8)', border: 'none', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', color: 'white', fontSize: '0.7rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setFormAdmissionPass('')}>✕</button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <label style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    cursor: 'pointer', padding: '0.85rem 1rem',
+                    border: '2px dashed var(--panel-border)', borderRadius: '10px',
+                    color: 'var(--text-secondary)', fontSize: '0.85rem',
+                    transition: 'border-color 0.2s, color 0.2s'
+                  }}
+                    onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--primary)'; e.currentTarget.style.color = 'white'; }}
+                    onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--panel-border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+                  >
+                    <Upload size={16} />
+                    <span>Cargar pase de admisión (imagen JPG/PNG o archivo PDF)</span>
+                    <input
+                      type="file"
+                      accept="image/*,application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={handleAdmissionPassChange}
+                    />
+                  </label>
+                )}
               </div>
 
               <div className="modal-footer">
