@@ -93,17 +93,10 @@ const initLocalData = () => {
   if (!localStorage.getItem("workshop_users")) {
     localStorage.setItem("workshop_users", JSON.stringify(defaultUsers));
   }
-  if (!localStorage.getItem("workshop_inventory")) {
-    localStorage.setItem("workshop_inventory", JSON.stringify(defaultInventory));
-  }
-  if (!localStorage.getItem("workshop_vehicles")) {
-    localStorage.setItem("workshop_vehicles", JSON.stringify(defaultVehicles));
-  }
-  if (!localStorage.getItem("workshop_outgoings")) {
-    localStorage.setItem("workshop_outgoings", JSON.stringify(defaultOutgoings));
-  }
-  if (!localStorage.getItem("workshop_vehicle_updates")) {
-    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(defaultVehicleUpdates));
+  // Clear legacy mock vehicles from LocalStorage if present
+  const localV = localStorage.getItem("workshop_vehicles");
+  if (localV && (localV.includes("V-1001") || localV.includes("V-1002"))) {
+    localStorage.removeItem("workshop_vehicles");
   }
 };
 initLocalData();
@@ -383,11 +376,9 @@ export const removeInventoryItem = async (id) => {
 // --- VEHICLES SERVICES ---
 
 export const getVehiclesList = async () => {
-  if (useLocalFallback) {
-    return JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
-  }
   try {
     const snapshot = await getDocs(collection(db, "vehicles"));
+    useLocalFallback = false;
     const list = [];
     snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
 
@@ -433,8 +424,8 @@ export const getVehiclesList = async () => {
     return list;
   } catch (e) {
     console.error("Firestore getVehiclesList error:", e);
-    useLocalFallback = true;
-    return getVehiclesList();
+    const local = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+    return local.filter(v => v.folio !== "V-1001" && v.folio !== "V-1002" && v.folio !== "V-1003");
   }
 };
 
