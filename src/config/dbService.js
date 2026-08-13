@@ -397,23 +397,44 @@ export const getVehiclesList = async () => {
     const list = [];
     snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
 
-    // Fetch extra overflow photos if any exist in vehicle_photos collection
+    // Fetch photos and heavy docs from separate collections in parallel
     try {
-      const extraSnap = await getDocs(collection(db, "vehicle_photos"));
-      const extraMap = {};
-      extraSnap.forEach(d => {
+      const [photosSnap, docsSnap] = await Promise.all([
+        getDocs(collection(db, "vehicle_photos")),
+        getDocs(collection(db, "vehicle_docs"))
+      ]);
+
+      const photosMap = {};
+      photosSnap.forEach(d => {
         const data = d.data();
         if (data.vehicleFolio && data.url) {
-          if (!extraMap[data.vehicleFolio]) extraMap[data.vehicleFolio] = [];
-          extraMap[data.vehicleFolio].push(data.url);
+          if (!photosMap[data.vehicleFolio]) photosMap[data.vehicleFolio] = [];
+          photosMap[data.vehicleFolio].push({ index: data.index ?? 0, url: data.url });
         }
       });
+
+      const docsMap = {};
+      docsSnap.forEach(d => {
+        const data = d.data();
+        if (data.vehicleFolio && data.type && data.url) {
+          if (!docsMap[data.vehicleFolio]) docsMap[data.vehicleFolio] = {};
+          docsMap[data.vehicleFolio][data.type] = data.url;
+        }
+      });
+
       list.forEach(v => {
-        if (extraMap[v.folio]) {
-          v.imageUrls = [...(v.imageUrls || []), ...extraMap[v.folio]];
+        if (photosMap[v.folio] && photosMap[v.folio].length > 0) {
+          photosMap[v.folio].sort((a, b) => a.index - b.index);
+          v.imageUrls = photosMap[v.folio].map(p => p.url);
+        }
+        if (docsMap[v.folio]) {
+          if (docsMap[v.folio].admissionPass) v.admissionPassUrl = docsMap[v.folio].admissionPass;
+          if (docsMap[v.folio].inventoryDoc) v.inventoryDocUrl = docsMap[v.folio].inventoryDoc;
         }
       });
-    } catch { /* ignore extra photos error */ }
+    } catch (extraErr) {
+      console.warn("Extra docs/photos fetch error:", extraErr);
+    }
 
     return list;
   } catch (e) {
@@ -451,42 +472,57 @@ export const saveVehicle = async (vehicle) => {
     return;
   }
   try {
-    let payload = {
+    const { imageUrls = [], admissionPassUrl = '', inventoryDocUrl = '', ...metaData } = vehicle;
+
+    // Main document stores text metadata + primary photo thumbnail (size < 60 KB)
+    const mainDocPayload = {
       orderNumber: '',
       model: '',
-      imageUrls: [],
-      admissionPassUrl: '',
-      inventoryDocUrl: '',
       bodyworkStatus: 'pendiente',
       mechanicsStatus: 'pendiente',
       orderedParts: [],
       deliveredAt: null,
-      ...vehicle,
-      entryDate: vehicle.entryDate || new Date().toISOString()
+      color: '',
+      insurance: '',
+      details: '',
+      ...metaData,
+      primaryPhoto: imageUrls.length > 0 ? imageUrls[0] : '',
+      imageUrls: imageUrls.length <= 2 ? imageUrls : imageUrls.slice(0, 2),
+      admissionPassUrl: (admissionPassUrl.length < 150000) ? admissionPassUrl : '',
+      inventoryDocUrl: (inventoryDocUrl.length < 150000) ? inventoryDocUrl : '',
+      active: metaData.active ?? true,
+      entryDate: metaData.entryDate || new Date().toISOString()
     };
 
-    // If total payload size > 850 KB, split imageUrls so main doc remains under 1MB
-    let extraPhotos = [];
-    let strSize = JSON.stringify(payload).length;
+    // 1. Save main vehicle doc (stays lightweight < 60 KB)
+    await setDoc(doc(db, "vehicles", vehicle.folio), mainDocPayload, { merge: true });
 
-    if (strSize > 850 * 1024 && payload.imageUrls.length > 3) {
-      const keepCount = Math.max(3, Math.floor(payload.imageUrls.length / 2));
-      extraPhotos = payload.imageUrls.slice(keepCount);
-      payload.imageUrls = payload.imageUrls.slice(0, keepCount);
+    // 2. Save ALL photos in separate vehicle_photos collection (~25 KB per doc)
+    if (imageUrls.length > 0) {
+      const photoPromises = imageUrls.map((url, i) =>
+        setDoc(doc(db, "vehicle_photos", `${vehicle.folio}_p_${i}`), {
+          vehicleFolio: vehicle.folio,
+          url,
+          index: i
+        })
+      );
+      await Promise.all(photoPromises);
     }
 
-    // We use the Folio as the Document ID
-    await setDoc(doc(db, "vehicles", vehicle.folio), payload, { merge: true });
-
-    // Save overflow photos to vehicle_photos collection
-    if (extraPhotos.length > 0) {
-      for (let i = 0; i < extraPhotos.length; i++) {
-        await setDoc(doc(db, "vehicle_photos", `${vehicle.folio}_extra_${i}`), {
-          vehicleFolio: vehicle.folio,
-          url: extraPhotos[i],
-          index: i
-        });
-      }
+    // 3. Save heavy admission pass & inventory docs in separate vehicle_docs collection
+    if (admissionPassUrl) {
+      await setDoc(doc(db, "vehicle_docs", `${vehicle.folio}_admission`), {
+        vehicleFolio: vehicle.folio,
+        type: 'admissionPass',
+        url: admissionPassUrl
+      });
+    }
+    if (inventoryDocUrl) {
+      await setDoc(doc(db, "vehicle_docs", `${vehicle.folio}_inventory`), {
+        vehicleFolio: vehicle.folio,
+        type: 'inventoryDoc',
+        url: inventoryDocUrl
+      });
     }
   } catch (e) {
     console.error("Firestore saveVehicle error:", e);
