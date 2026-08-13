@@ -104,6 +104,9 @@ const recompressBase64 = (base64Str, maxWidth = 800, maxHeight = 800, quality = 
     img.src = base64Str;
   });
 
+// Helper to estimate storage size in KB of a base64 string
+const getStorageKB = (str) => (!str ? 0 : Math.round((str.length * 0.75) / 1024));
+
 const ProcessStatusSelector = ({ value, onChange, disabled }) => (
   <div className="process-status-selector">
     {['pendiente', 'en_proceso', 'terminado'].map(s => (
@@ -1424,18 +1427,32 @@ const Vehicles = ({ currentUser }) => {
               <div className="form-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                   <Camera size={13} /> Fotografías del Vehículo
-                  <span style={{ marginLeft: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 400 }}>({formImageUrls.length} cargada{formImageUrls.length !== 1 ? 's' : ''})</span>
+                  <span style={{ marginLeft: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 400 }}>
+                    ({formImageUrls.length} cargada{formImageUrls.length !== 1 ? 's' : ''} — {formImageUrls.reduce((acc, url) => acc + getStorageKB(url), 0)} KB total)
+                  </span>
                 </label>
 
                 {/* Current photos */}
                 {formImageUrls.length > 0 && (
                   <div className="multi-upload-zone" style={{ marginBottom: '0.75rem' }}>
-                    {formImageUrls.map((url, i) => (
-                      <div key={i} className="upload-slot">
-                        <img src={url} alt="" />
-                        <button type="button" className="remove-photo" onClick={() => handleRemovePhoto(i)}>✕</button>
-                      </div>
-                    ))}
+                    {formImageUrls.map((url, i) => {
+                      const photoKB = getStorageKB(url);
+                      return (
+                        <div key={i} className="upload-slot" style={{ position: 'relative' }}>
+                          <img src={url} alt="" />
+                          <span style={{
+                            position: 'absolute', bottom: 4, left: 4,
+                            background: 'rgba(15,23,42,0.85)',
+                            color: photoKB > 150 ? '#f87171' : '#e2e8f0',
+                            padding: '0.1rem 0.35rem', borderRadius: '4px',
+                            fontSize: '0.65rem', fontWeight: 600
+                          }}>
+                            {photoKB} KB
+                          </span>
+                          <button type="button" className="remove-photo" onClick={() => handleRemovePhoto(i)}>✕</button>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
 
@@ -1463,12 +1480,16 @@ const Vehicles = ({ currentUser }) => {
               </div>
 
               {/* Documents Row: Admission Pass + Inventario */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
                 {/* Admission Pass — imagen o PDF */}
-                <div className="form-group">
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <FileText size={13} /> Pase de Admisión
-                    <span style={{ marginLeft: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(PDF/imagen, máx 10 MB)</span>
+                    {formAdmissionPass && (
+                      <span style={{ marginLeft: '0.2rem', fontSize: '0.75rem', color: getStorageKB(formAdmissionPass) > 250 ? '#f87171' : '#34d399', fontWeight: 600 }}>
+                        ({getStorageKB(formAdmissionPass)} KB)
+                      </span>
+                    )}
                   </label>
                   {formAdmissionPass ? (
                     <div style={{ position: 'relative', border: '1px solid var(--panel-border)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.3)' }}>
@@ -1477,6 +1498,7 @@ const Vehicles = ({ currentUser }) => {
                           <span style={{ fontSize: '1.5rem' }}>📄</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: '0.8rem', color: 'white' }}>PDF Cargado</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{getStorageKB(formAdmissionPass)} KB</div>
                           </div>
                           <button type="button" className="btn btn-secondary btn-sm" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} onClick={() => setFormAdmissionPass('')}>
                             <X size={12} />
@@ -1513,10 +1535,14 @@ const Vehicles = ({ currentUser }) => {
                 </div>
 
                 {/* Inventario del Vehículo — imagen o PDF */}
-                <div className="form-group">
+                <div className="form-group" style={{ marginBottom: 0 }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <FileText size={13} /> Inventario del Vehículo
-                    <span style={{ marginLeft: '0.35rem', fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 400 }}>(PDF/imagen, máx 10 MB)</span>
+                    {formInventoryDoc && (
+                      <span style={{ marginLeft: '0.2rem', fontSize: '0.75rem', color: getStorageKB(formInventoryDoc) > 250 ? '#f87171' : '#34d399', fontWeight: 600 }}>
+                        ({getStorageKB(formInventoryDoc)} KB)
+                      </span>
+                    )}
                   </label>
                   {formInventoryDoc ? (
                     <div style={{ position: 'relative', border: '1px solid var(--panel-border)', borderRadius: '10px', overflow: 'hidden', background: 'rgba(15,23,42,0.3)' }}>
@@ -1525,6 +1551,7 @@ const Vehicles = ({ currentUser }) => {
                           <span style={{ fontSize: '1.5rem' }}>📄</span>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: '0.8rem', color: 'white' }}>PDF Cargado</div>
+                            <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{getStorageKB(formInventoryDoc)} KB</div>
                           </div>
                           <button type="button" className="btn btn-secondary btn-sm" style={{ fontSize: '0.7rem', padding: '0.2rem 0.4rem' }} onClick={() => setFormInventoryDoc('')}>
                             <X size={12} />
@@ -1560,6 +1587,55 @@ const Vehicles = ({ currentUser }) => {
                   )}
                 </div>
               </div>
+
+              {/* Live Payload Storage Meter */}
+              {(() => {
+                const photosKB = formImageUrls.reduce((acc, url) => acc + getStorageKB(url), 0);
+                const admissionKB = getStorageKB(formAdmissionPass);
+                const inventoryKB = getStorageKB(formInventoryDoc);
+                const totalKB = photosKB + admissionKB + inventoryKB + 5;
+                const pct = Math.min(100, Math.round((totalKB / 1024) * 100));
+                const isCritical = totalKB > 950;
+                const isWarning = totalKB > 750;
+
+                return (
+                  <div style={{
+                    background: isCritical ? 'rgba(239,68,68,0.12)' : isWarning ? 'rgba(245,158,11,0.1)' : 'rgba(15,23,42,0.4)',
+                    border: `1px solid ${isCritical ? '#f87171' : isWarning ? '#fbbf24' : 'var(--panel-border)'}`,
+                    borderRadius: '10px',
+                    padding: '0.75rem 1rem',
+                    marginBottom: '1rem'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', fontSize: '0.82rem' }}>
+                      <span style={{ fontWeight: 600, color: 'white', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                        📊 Peso total del registro:
+                        <strong style={{ color: isCritical ? '#f87171' : isWarning ? '#fbbf24' : '#34d399' }}>
+                          {totalKB} KB
+                        </strong>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/ 1,024 KB (1 MB)</span>
+                      </span>
+                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: isCritical ? '#f87171' : isWarning ? '#fbbf24' : '#34d399' }}>
+                        {pct}% usado
+                      </span>
+                    </div>
+
+                    <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        width: `${pct}%`,
+                        height: '100%',
+                        background: isCritical ? '#ef4444' : isWarning ? '#f59e0b' : 'linear-gradient(90deg, #10b981, #3b82f6)',
+                        transition: 'width 0.3s ease, background 0.3s ease'
+                      }} />
+                    </div>
+
+                    {isCritical && (
+                      <div style={{ fontSize: '0.78rem', color: '#f87171', marginTop: '0.4rem', fontWeight: 500 }}>
+                        ⚠️ El documento supera o está muy cerca del límite de 1 MB de Firestore. Elimina fotos o documentos pesados para poder guardar.
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>Cancelar</button>
