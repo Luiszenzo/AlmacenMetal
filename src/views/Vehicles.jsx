@@ -26,9 +26,6 @@ const PART_STATUS_LABELS = { pendiente: 'Pendiente', pedido: 'Pedido', recibido:
 const compressFile = (file, maxWidth = 800, maxHeight = 800, quality = 0.45) =>
   new Promise((resolve, reject) => {
     if (file.type === 'application/pdf') {
-      if (file.size > 700 * 1024) {
-        alert('El archivo PDF supera los 700 KB. Se recomienda un PDF más liviano para no superar el límite de la base de datos.');
-      }
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result);
       reader.onerror = reject;
@@ -1633,44 +1630,36 @@ const Vehicles = ({ currentUser }) => {
                 const inventoryKB = getStorageKB(formInventoryDoc);
                 const totalKB = photosKB + admissionKB + inventoryKB + 5;
                 const pct = Math.min(100, Math.round((totalKB / 1024) * 100));
-                const isCritical = totalKB > 950;
-                const isWarning = totalKB > 750;
 
                 return (
                   <div style={{
-                    background: isCritical ? 'rgba(239,68,68,0.12)' : isWarning ? 'rgba(245,158,11,0.1)' : 'rgba(15,23,42,0.4)',
-                    border: `1px solid ${isCritical ? '#f87171' : isWarning ? '#fbbf24' : 'var(--panel-border)'}`,
+                    background: 'rgba(15,23,42,0.4)',
+                    border: '1px solid var(--panel-border)',
                     borderRadius: '10px',
                     padding: '0.75rem 1rem',
                     marginBottom: '1rem'
                   }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem', fontSize: '0.82rem' }}>
                       <span style={{ fontWeight: 600, color: 'white', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                        📊 Peso total del registro:
-                        <strong style={{ color: isCritical ? '#f87171' : isWarning ? '#fbbf24' : '#34d399' }}>
+                        📊 Peso total comprimido:
+                        <strong style={{ color: '#34d399' }}>
                           {totalKB} KB
                         </strong>
-                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>/ 1,024 KB (1 MB)</span>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>(Soporta archivos .ZIP / PDF de hasta 2,000 MB)</span>
                       </span>
-                      <span style={{ fontSize: '0.75rem', fontWeight: 700, color: isCritical ? '#f87171' : isWarning ? '#fbbf24' : '#34d399' }}>
-                        {pct}% usado
+                      <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399' }}>
+                        {formImageUrls.length} fotos cargadas
                       </span>
                     </div>
 
                     <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
                       <div style={{
-                        width: `${pct}%`,
+                        width: `${Math.min(100, Math.max(5, pct))}%`,
                         height: '100%',
-                        background: isCritical ? '#ef4444' : isWarning ? '#f59e0b' : 'linear-gradient(90deg, #10b981, #3b82f6)',
-                        transition: 'width 0.3s ease, background 0.3s ease'
+                        background: 'linear-gradient(90deg, #10b981, #3b82f6)',
+                        transition: 'width 0.3s ease'
                       }} />
                     </div>
-
-                    {isCritical && (
-                      <div style={{ fontSize: '0.78rem', color: '#f87171', marginTop: '0.4rem', fontWeight: 500 }}>
-                        ⚠️ El documento supera o está muy cerca del límite de 1 MB de Firestore. Elimina fotos o documentos pesados para poder guardar.
-                      </div>
-                    )}
                   </div>
                 );
               })()}

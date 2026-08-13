@@ -393,18 +393,28 @@ export const getVehiclesList = async () => {
     return JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
   }
   try {
-    const querySnapshot = await getDocs(collection(db, "vehicles"));
+    const snapshot = await getDocs(collection(db, "vehicles"));
     const list = [];
-    querySnapshot.forEach((doc) => {
-      list.push({ id: doc.id, ...doc.data() });
-    });
-    // Seed
-    if (list.length === 0) {
-      for (const v of defaultVehicles) {
-        await setDoc(doc(db, "vehicles", v.folio), v);
-        list.push(v);
-      }
-    }
+    snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
+
+    // Fetch extra overflow photos if any exist in vehicle_photos collection
+    try {
+      const extraSnap = await getDocs(collection(db, "vehicle_photos"));
+      const extraMap = {};
+      extraSnap.forEach(d => {
+        const data = d.data();
+        if (data.vehicleFolio && data.url) {
+          if (!extraMap[data.vehicleFolio]) extraMap[data.vehicleFolio] = [];
+          extraMap[data.vehicleFolio].push(data.url);
+        }
+      });
+      list.forEach(v => {
+        if (extraMap[v.folio]) {
+          v.imageUrls = [...(v.imageUrls || []), ...extraMap[v.folio]];
+        }
+      });
+    } catch { /* ignore extra photos error */ }
+
     return list;
   } catch (e) {
     console.error("Firestore getVehiclesList error:", e);
@@ -441,7 +451,7 @@ export const saveVehicle = async (vehicle) => {
     return;
   }
   try {
-    const payload = {
+    let payload = {
       orderNumber: '',
       model: '',
       imageUrls: [],
@@ -455,13 +465,29 @@ export const saveVehicle = async (vehicle) => {
       entryDate: vehicle.entryDate || new Date().toISOString()
     };
 
-    const strSize = JSON.stringify(payload).length;
-    if (strSize > 1024 * 1024) {
-      throw new Error(`El tamaño del vehículo (${(strSize / 1024 / 1024).toFixed(2)} MB) supera el límite de Firestore (1 MB). Intenta subir un PDF de Pase o Inventario más liviano.`);
+    // If total payload size > 850 KB, split imageUrls so main doc remains under 1MB
+    let extraPhotos = [];
+    let strSize = JSON.stringify(payload).length;
+
+    if (strSize > 850 * 1024 && payload.imageUrls.length > 3) {
+      const keepCount = Math.max(3, Math.floor(payload.imageUrls.length / 2));
+      extraPhotos = payload.imageUrls.slice(keepCount);
+      payload.imageUrls = payload.imageUrls.slice(0, keepCount);
     }
 
     // We use the Folio as the Document ID
     await setDoc(doc(db, "vehicles", vehicle.folio), payload, { merge: true });
+
+    // Save overflow photos to vehicle_photos collection
+    if (extraPhotos.length > 0) {
+      for (let i = 0; i < extraPhotos.length; i++) {
+        await setDoc(doc(db, "vehicle_photos", `${vehicle.folio}_extra_${i}`), {
+          vehicleFolio: vehicle.folio,
+          url: extraPhotos[i],
+          index: i
+        });
+      }
+    }
   } catch (e) {
     console.error("Firestore saveVehicle error:", e);
     if (e.message && (e.message.includes("exceeds the maximum allowed size") || e.message.includes("supera el límite"))) {
