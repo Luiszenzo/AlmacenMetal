@@ -16,6 +16,7 @@ import {
   saveOrderedPart
 } from '../config/dbService';
 import { generateVehiclePDF, generateGeneralPDF } from '../utils/reports';
+import JSZip from 'jszip';
 
 // ---- Helpers ----
 const PROCESS_LABELS = { pendiente: 'Pendiente', en_proceso: 'En Proceso', terminado: 'Terminado' };
@@ -262,14 +263,51 @@ const Vehicles = ({ currentUser }) => {
     loadVehicleUpdates(v.folio);
   };
 
-  // ---- Photo Handling (compresión automática) ----
+  // ---- Photo Handling (soporta imágenes individuales y archivos .ZIP) ----
   const handleAddPhoto = async (e) => {
     const files = Array.from(e.target.files);
     if (!files.length) return;
+
     try {
-      const b64s = await Promise.all(files.map(f => compressFile(f)));
-      setFormImageUrls(prev => [...prev, ...b64s]);
-    } catch { alert('Error al procesar imágenes.'); }
+      const extractedImages = [];
+
+      for (const file of files) {
+        if (file.name.toLowerCase().endsWith('.zip') || file.type.includes('zip')) {
+          try {
+            const zip = await JSZip.loadAsync(file);
+            const imagePromises = [];
+
+            zip.forEach((relativePath, zipEntry) => {
+              if (!zipEntry.dir && relativePath.match(/\.(jpe?g|png|webp|gif|bmp)$/i)) {
+                imagePromises.push(
+                  zipEntry.async('blob').then(async (blob) => {
+                    const imgFile = new File([blob], zipEntry.name, { type: blob.type || 'image/jpeg' });
+                    return compressFile(imgFile);
+                  })
+                );
+              }
+            });
+
+            const zipExtracted = await Promise.all(imagePromises);
+            extractedImages.push(...zipExtracted);
+          } catch (zipErr) {
+            console.error(zipErr);
+            alert(`Error al descomprimir el archivo ZIP: ${file.name}`);
+          }
+        } else {
+          const compressed = await compressFile(file);
+          extractedImages.push(compressed);
+        }
+      }
+
+      if (extractedImages.length > 0) {
+        setFormImageUrls(prev => [...prev, ...extractedImages]);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Error al procesar las imágenes.');
+    }
+
     e.target.value = '';
   };
 
@@ -1468,10 +1506,10 @@ const Vehicles = ({ currentUser }) => {
                   onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--panel-border)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
                 >
                   <Camera size={16} />
-                  <span>Agregar fotos (puedes seleccionar varias a la vez)</span>
+                  <span>Agregar fotos o subir archivo .ZIP con fotografías</span>
                   <input
                     type="file"
-                    accept="image/*"
+                    accept="image/*,.zip,application/zip,application/x-zip-compressed"
                     multiple
                     style={{ display: 'none' }}
                     onChange={handleAddPhoto}
