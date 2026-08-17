@@ -12,14 +12,16 @@
 const STORAGE_KEYS = {
   LOGIN_ATTEMPTS: 'sec_login_attempts',
   LOCKOUT_UNTIL:  'sec_lockout_until',
+  LOCKOUT_COUNT:  'sec_lockout_count',   // cuántas veces ha sido penalizado
   SEARCH_LOG:     'sec_search_log',
   AUDIT_LOG:      'sec_audit_log',
 };
 
 // ── 1. RATE LIMITER PARA LOGIN ───────────────────────────────
-const MAX_LOGIN_ATTEMPTS = 5;
-const LOGIN_WINDOW_MS    = 15 * 60 * 1000; // 15 minutos
-const LOCKOUT_MS         = 30 * 60 * 1000; // 30 minutos de bloqueo
+const MAX_LOGIN_ATTEMPTS   = 5;
+const LOGIN_WINDOW_MS      = 10 * 60 * 1000; // ventana de 10 minutos
+const BASE_LOCKOUT_MS      = 1  * 60 * 1000; // 1 minuto base (se duplica con cada penalización)
+const MAX_LOCKOUT_MS       = 64 * 60 * 1000; // tope máximo: 64 minutos
 
 /**
  * Verifica si el usuario está actualmente bloqueado por demasiados intentos.
@@ -71,10 +73,26 @@ export const recordFailedLoginAttempt = (email = '') => {
   });
 
   if (attempts.length >= MAX_LOGIN_ATTEMPTS) {
-    const lockUntil = now + LOCKOUT_MS;
+    // Obtener cuántas veces ya ha sido penalizado
+    const lockoutCount = parseInt(localStorage.getItem(STORAGE_KEYS.LOCKOUT_COUNT) || '0', 10);
+
+    // Tiempo de penalización: 1 min × 2^lockoutCount (con tope)
+    const lockoutMs = Math.min(BASE_LOCKOUT_MS * Math.pow(2, lockoutCount), MAX_LOCKOUT_MS);
+
+    const lockUntil = now + lockoutMs;
     localStorage.setItem(STORAGE_KEYS.LOCKOUT_UNTIL, String(lockUntil));
+    localStorage.setItem(STORAGE_KEYS.LOCKOUT_COUNT, String(lockoutCount + 1));
     localStorage.removeItem(STORAGE_KEYS.LOGIN_ATTEMPTS);
-    return { locked: true, attemptsLeft: 0 };
+
+    _addAuditEntry({
+      type: 'ACCOUNT_LOCKED',
+      email: email.substring(0, 50),
+      timestamp: new Date().toISOString(),
+      lockoutNumber: lockoutCount + 1,
+      lockoutMs,
+    });
+
+    return { locked: true, attemptsLeft: 0, lockoutMs };
   }
 
   return { locked: false, attemptsLeft: MAX_LOGIN_ATTEMPTS - attempts.length };
@@ -86,6 +104,7 @@ export const recordFailedLoginAttempt = (email = '') => {
 export const clearLoginAttempts = () => {
   localStorage.removeItem(STORAGE_KEYS.LOGIN_ATTEMPTS);
   localStorage.removeItem(STORAGE_KEYS.LOCKOUT_UNTIL);
+  localStorage.removeItem(STORAGE_KEYS.LOCKOUT_COUNT); // reinicia el contador de penalizaciones
 };
 
 // ── 2. THROTTLE PARA BÚSQUEDAS PÚBLICAS ─────────────────────
