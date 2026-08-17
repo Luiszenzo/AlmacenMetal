@@ -1,4 +1,11 @@
 import { db, auth, firebaseConfig } from "./firebase";
+import {
+  checkLoginRateLimit,
+  recordFailedLoginAttempt,
+  clearLoginAttempts,
+  sanitizeInput,
+  validateFieldSize
+} from "./security";
 import { initializeApp } from "firebase/app";
 import { 
   collection, 
@@ -22,84 +29,33 @@ import {
   getAuth
 } from "firebase/auth";
 
-// --- MOCK SEED DATA FOR LOCALSTORAGE FALLBACK ---
-const defaultUsers = [
-  { uid: "admin1", email: "admin@workshop.com", name: "Administrador General", role: "admin", active: true },
-  { uid: "encargado1", email: "encargado@workshop.com", name: "Juan Pérez (Almacén)", role: "encargado", active: true },
-  { uid: "tecnico1", email: "tecnico@workshop.com", name: "Carlos Mendoza (Mecánico)", role: "tecnico", active: true },
-  { uid: "tecnico2", email: "tecnico2@workshop.com", name: "Luis Gómez (Electricista)", role: "tecnico", active: true }
-];
-
-const defaultInventory = [
-  { id: "inv1", code: "BAL-902", name: "Balata Delantera", description: "Balatas para frenos de disco delanteros (coche standard)", quantity: 15, minStock: 5, cost: 350, category: "Frenos" },
-  { id: "inv2", code: "FIL-102", name: "Filtro de Aceite Sintético", description: "Filtro de aceite premium de larga duración", quantity: 2, minStock: 8, cost: 180, category: "Mantenimiento" },
-  { id: "inv3", code: "BUJ-301", name: "Bujía Iridium", description: "Bujías de iridium de alto rendimiento", quantity: 45, minStock: 12, cost: 95, category: "Motor" },
-  { id: "inv4", code: "ACC-502", name: "Batería LTH L-47", description: "Batería de 12V para acumulador", quantity: 6, minStock: 3, cost: 1850, category: "Eléctrico" },
-  { id: "inv5", code: "AMOR-10", name: "Amortiguador de Tracto", description: "Amortiguador de aire trasero para cabina de tractocamión", quantity: 4, minStock: 2, cost: 3200, category: "Suspensión" }
-];
-
-const defaultVehicles = [
-  { 
-    folio: "V-1001", orderNumber: "ORD-2026-001", plate: "XYZ-123-A", model: "Chevrolet Aveo 2018",
-    type: "Coche", details: "Afinación mayor y cambio de balatas delanteras. Se detectó fuga leve en radiador.",
-    imageUrls: [], admissionPassUrl: "",
-    bodyworkStatus: "en_proceso", mechanicsStatus: "pendiente",
-    orderedParts: [
-      { id: "op1", name: "Radiador Chevrolet Aveo", supplier: "Refaccionaria García", status: "pedido", quantity: 1, notes: "Pedido el 10/08" }
-    ],
-    active: true, entryDate: new Date().toISOString(), deliveredAt: null
-  },
-  { 
-    folio: "V-1002", orderNumber: "ORD-2026-002", plate: "TR-882-P", model: "Kenworth T680 2021",
-    type: "Tracto", details: "Falla de luces en cabina y amortiguador flojo. Revisión de frenos de aire.",
-    imageUrls: [], admissionPassUrl: "",
-    bodyworkStatus: "pendiente", mechanicsStatus: "en_proceso",
-    orderedParts: [],
-    active: true, entryDate: new Date().toISOString(), deliveredAt: null
-  },
-  { 
-    folio: "V-1003", orderNumber: "ORD-2026-003", plate: "MOTO-99", model: "Yamaha R6 2019",
-    type: "Motocicleta", details: "Cambio de bujías y filtro de aceite. Ajuste de cadena.",
-    imageUrls: [], admissionPassUrl: "",
-    bodyworkStatus: "terminado", mechanicsStatus: "terminado",
-    orderedParts: [],
-    active: false, entryDate: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(), deliveredAt: new Date().toISOString()
-  }
-];
-
-const defaultOutgoings = [
-  { id: "out1", materialId: "inv1", materialName: "Balata Delantera", quantity: 4, technicianId: "tecnico1", technicianName: "Carlos Mendoza (Mecánico)", vehicleFolio: "V-1001", date: new Date().toISOString(), costPerUnit: 350, totalCost: 1400 }
-];
-
-const defaultVehicleUpdates = [
-  {
-    id: "upd1",
-    vehicleFolio: "V-1001",
-    date: new Date().toISOString(),
-    technicianName: "Carlos Mendoza (Mecánico)",
-    bodyworkNote: "Se inició el proceso de alineación de guardafangos delanteros.",
-    mechanicsNote: "",
-    generalNote: "Vehículo recibido. Diagnóstico inicial completado.",
-    photosAdded: [],
-    createdAt: new Date().toISOString()
-  }
-];
-
 // Helper to check if Firebase is connected / ready (runs check on firestore)
 export let useLocalFallback = localStorage.getItem("workshop_use_local_fallback") === "true";
 
-// Initialize localStorage if empty
-const initLocalData = () => {
-  if (!localStorage.getItem("workshop_users")) {
-    localStorage.setItem("workshop_users", JSON.stringify(defaultUsers));
-  }
-  // Clear legacy mock vehicles from LocalStorage if present
+// Clear legacy mock seed data from LocalStorage if present (one-time cleanup)
+const cleanLegacySeedData = () => {
+  // Remove mock vehicles seeded in older versions
   const localV = localStorage.getItem("workshop_vehicles");
   if (localV && (localV.includes("V-1001") || localV.includes("V-1002"))) {
     localStorage.removeItem("workshop_vehicles");
   }
+  // Remove mock users seeded in older versions
+  const localU = localStorage.getItem("workshop_users");
+  if (localU && localU.includes("admin@workshop.com")) {
+    localStorage.removeItem("workshop_users");
+  }
+  // Remove mock inventory seeded in older versions
+  const localI = localStorage.getItem("workshop_inventory");
+  if (localI && (localI.includes("BAL-902") || localI.includes("FIL-102"))) {
+    localStorage.removeItem("workshop_inventory");
+  }
+  // Remove mock outgoings seeded in older versions
+  const localO = localStorage.getItem("workshop_outgoings");
+  if (localO && localO.includes("out1")) {
+    localStorage.removeItem("workshop_outgoings");
+  }
 };
-initLocalData();
+cleanLegacySeedData();
 
 export const checkFirebaseStatus = async () => {
   try {
@@ -124,24 +80,46 @@ export const resetFirebaseConnection = () => {
 // --- AUTHENTICATION SERVICES ---
 
 export const loginUser = async (email, password) => {
-  if (useLocalFallback) {
-    const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
-    const matched = localUsers.find(u => u.email === email && (u.password === password || password === "admin123"));
-    if (matched) {
-      if (!matched.active) {
-        throw new Error("Usuario desactivado.");
-      }
-      return matched;
-    }
-    throw new Error("Credenciales incorrectas o usuario no configurado.");
+  // ── Seguridad: Verificar rate limit antes de cualquier intento ──
+  const rateCheck = checkLoginRateLimit();
+  if (rateCheck.blocked) {
+    throw new Error(`RATE_LIMITED:${rateCheck.remainingMs}`);
   }
 
-  // Try Firebase Auth
+  // ── Seguridad: Sanitizar y validar inputs ──
+  const cleanEmail    = sanitizeInput(email,    'email');
+  const cleanPassword = sanitizeInput(password, 'password');
+
+  const emailSizeCheck = validateFieldSize(cleanEmail, 'email');
+  if (!emailSizeCheck.valid) throw new Error(emailSizeCheck.reason);
+
+  const passSizeCheck = validateFieldSize(cleanPassword, 'password');
+  if (!passSizeCheck.valid) throw new Error(passSizeCheck.reason);
+
+  if (!cleanEmail || !cleanPassword) {
+    throw new Error('Correo y contraseña son requeridos.');
+  }
+
+  // Modo fallback local (sin conexión)
+  if (useLocalFallback) {
+    const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
+    const matched = localUsers.find(u => u.email === cleanEmail && u.password === cleanPassword);
+    if (matched) {
+      if (!matched.active) throw new Error("Usuario desactivado.");
+      clearLoginAttempts();
+      return matched;
+    }
+    // Registrar intento fallido
+    recordFailedLoginAttempt(cleanEmail);
+    throw new Error("Credenciales incorrectas.");
+  }
+
+  // ── Autenticación con Firebase Auth ──
   try {
-    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const userCredential = await signInWithEmailAndPassword(auth, cleanEmail, cleanPassword);
     const firebaseUser = userCredential.user;
-    
-    // Fetch role from Firestore
+
+    // Fetch role desde Firestore
     try {
       const userDoc = await getDocs(query(collection(db, "users"), where("uid", "==", firebaseUser.uid)));
       if (!userDoc.empty) {
@@ -149,33 +127,53 @@ export const loginUser = async (email, password) => {
         if (!userData.active) {
           throw new Error("Usuario desactivado. Contacte al administrador.");
         }
+        clearLoginAttempts();
         return { uid: firebaseUser.uid, email: firebaseUser.email, ...userData };
       }
     } catch (e) {
-      console.warn("Could not load user profile from Firestore, searching locally:", e);
+      if (e.message.includes('desactivado')) throw e;
+      // Si no pudo leer el rol, continuar con perfil mínimo
     }
-    
-    // Check if matching email exists in local db as fallback
+
+    // Revisar en localStorage como respaldo de rol
     const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
-    const matchingLocal = localUsers.find(u => u.email === email);
+    const matchingLocal = localUsers.find(u => u.email === cleanEmail);
     if (matchingLocal) {
+      clearLoginAttempts();
       return { uid: firebaseUser.uid, ...matchingLocal };
     }
-    
-    // Fallback default role
+
+    clearLoginAttempts();
     return { uid: firebaseUser.uid, email: firebaseUser.email, name: firebaseUser.email.split('@')[0], role: "tecnico", active: true };
+
   } catch (error) {
-    useLocalFallback = true;
-    // If Firebase Auth failed due to offline/config, test local fallback database
-    const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
-    const matched = localUsers.find(u => u.email === email && (u.password === password || password === "admin123"));
-    if (matched) {
-      if (!matched.active) {
-        throw new Error("Usuario desactivado.");
+    // Si es un error de credenciales inválidas de Firebase
+    if (error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found' ||
+        error.code === 'auth/invalid-credential') {
+      const result = recordFailedLoginAttempt(cleanEmail);
+      if (result.locked) {
+        const rateCheck2 = checkLoginRateLimit();
+        throw new Error(`RATE_LIMITED:${rateCheck2.remainingMs}`);
       }
-      return matched;
+      throw new Error(`Credenciales incorrectas. Intentos restantes: ${result.attemptsLeft}.`);
     }
-    throw new Error("Credenciales incorrectas o usuario no configurado.");
+
+    // Error de red / Firebase offline → intentar con localStorage
+    if (error.code && error.code.startsWith('auth/network')) {
+      useLocalFallback = true;
+      const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
+      const matched = localUsers.find(u => u.email === cleanEmail && u.password === cleanPassword);
+      if (matched) {
+        if (!matched.active) throw new Error("Usuario desactivado.");
+        clearLoginAttempts();
+        return matched;
+      }
+      recordFailedLoginAttempt(cleanEmail);
+      throw new Error("Credenciales incorrectas.");
+    }
+
+    // Re-lanzar cualquier otro error (desactivado, etc.)
+    throw error;
   }
 };
 
@@ -199,13 +197,7 @@ export const getUsersList = async () => {
     querySnapshot.forEach((doc) => {
       users.push({ id: doc.id, ...doc.data() });
     });
-    // If empty in Firestore, let's write mock ones to help get started
-    if (users.length === 0) {
-      for (const u of defaultUsers) {
-        await setDoc(doc(db, "users", u.uid), u);
-        users.push(u);
-      }
-    }
+    // Si Firestore está vacío, retornar lista vacía (sin datos semilla)
     return users;
   } catch (e) {
     useLocalFallback = true;
@@ -682,6 +674,28 @@ export const saveVehicleUpdate = async (update) => {
   }
 };
 
+export const updateVehicleUpdate = async (id, fields) => {
+  if (useLocalFallback) {
+    const all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    const idx = all.findIndex(u => u.id === id);
+    if (idx !== -1) all[idx] = { ...all[idx], ...fields };
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(all));
+    return;
+  }
+  try {
+    await updateDoc(doc(db, "vehicle_updates", id), fields);
+    // Mirror in localStorage
+    const all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    const idx = all.findIndex(u => u.id === id);
+    if (idx !== -1) all[idx] = { ...all[idx], ...fields };
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(all));
+  } catch (e) {
+    console.error("Firestore updateVehicleUpdate error:", e);
+    useLocalFallback = true;
+    return updateVehicleUpdate(id, fields);
+  }
+};
+
 export const saveOrderedPart = async (folio, part) => {
   // Load the vehicle, update the orderedParts array, and save back
   if (useLocalFallback) {
@@ -723,3 +737,156 @@ export const saveOrderedPart = async (folio, part) => {
     return saveOrderedPart(folio, part);
   }
 };
+
+
+export const deleteVehicleUpdate = async (updateId, folderId = null) => {
+  const targetId = updateId || folderId;
+  if (!targetId) return;
+
+  if (useLocalFallback) {
+    let all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    all = all.filter(u => u.id !== targetId && u.folderId !== targetId);
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(all));
+    return;
+  }
+  try {
+    await deleteDoc(doc(db, "vehicle_updates", targetId));
+
+    // Also delete any child entries linked to this folder
+    try {
+      const childQuery = query(collection(db, "vehicle_updates"), where("folderId", "==", targetId));
+      const childSnap = await getDocs(childQuery);
+      const batch = writeBatch(db);
+      let count = 0;
+      childSnap.forEach(d => {
+        batch.delete(d.ref);
+        count++;
+      });
+      if (count > 0) {
+        await batch.commit();
+      }
+    } catch (err) {
+      console.warn("Child entries cleanup note:", err);
+    }
+
+    // Mirror deletion in LocalStorage
+    let all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    all = all.filter(u => u.id !== targetId && u.folderId !== targetId);
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(all));
+  } catch (e) {
+    console.error("Firestore deleteVehicleUpdate error:", e);
+    let all = JSON.parse(localStorage.getItem("workshop_vehicle_updates") || "[]");
+    all = all.filter(u => u.id !== targetId && u.folderId !== targetId);
+    localStorage.setItem("workshop_vehicle_updates", JSON.stringify(all));
+  }
+};
+
+
+// --- CLIENT VEHICLE COMMENTS & SEARCH ---
+
+const defaultVehicleComments = [
+  {
+    id: "com1",
+    vehicleFolio: "V-1001",
+    authorName: "Juan Alarcón (Cliente)",
+    authorRole: "cliente",
+    contact: "555-0192",
+    text: "Hola, me gustaría saber si la refacción del radiador ya viene en camino. ¡Gracias!",
+    createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  },
+  {
+    id: "com2",
+    vehicleFolio: "V-1001",
+    authorName: "Taller Metal Shapers",
+    authorRole: "taller",
+    contact: "",
+    text: "Buenas tardes Sr. Juan, el radiador ya fue pedido con el proveedor y llega mañana por la mañana.",
+    createdAt: new Date(Date.now() - 18 * 60 * 60 * 1000).toISOString()
+  }
+];
+
+export const searchVehicleForClient = async (searchTerm) => {
+  if (!searchTerm || !searchTerm.trim()) return null;
+  const cleanSearch = searchTerm.trim().toLowerCase().replace(/[^a-z0-9]/gi, '');
+  
+  const vehicles = await getVehiclesList();
+  const match = vehicles.find(v => {
+    const cleanPlate = (v.plate || '').toLowerCase().replace(/[^a-z0-9]/gi, '');
+    const cleanOrder = (v.orderNumber || '').toLowerCase().replace(/[^a-z0-9]/gi, '');
+    const cleanFolio = (v.folio || '').toLowerCase().replace(/[^a-z0-9]/gi, '');
+    
+    return (
+      (cleanPlate && cleanPlate.includes(cleanSearch)) ||
+      (cleanOrder && cleanOrder.includes(cleanSearch)) ||
+      (cleanFolio && cleanFolio.includes(cleanSearch))
+    );
+  });
+  
+  return match || null;
+};
+
+export const getVehicleComments = async (vehicleFolio) => {
+  if (!vehicleFolio) return [];
+  const local = JSON.parse(localStorage.getItem("workshop_vehicle_comments") || JSON.stringify(defaultVehicleComments));
+  const localList = (local || defaultVehicleComments).filter(c => c.vehicleFolio === vehicleFolio || (c.vehicleFolio === "V-1001" && (vehicleFolio === "XYZ-123-A" || vehicleFolio === "ORD-2026-001")));
+
+  if (useLocalFallback) {
+    return localList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
+  try {
+    const q = query(
+      collection(db, "vehicle_comments"),
+      where("vehicleFolio", "==", vehicleFolio)
+    );
+    const snapshot = await getDocs(q);
+    const list = [];
+    snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
+
+    // Merge Firestore comments with local comments (deduplicated by id)
+    const combinedMap = new Map();
+    localList.forEach(c => combinedMap.set(c.id, c));
+    list.forEach(c => combinedMap.set(c.id, c));
+
+    const result = Array.from(combinedMap.values());
+    if (result.length === 0 && (vehicleFolio === "V-1001" || vehicleFolio === "XYZ-123-A")) {
+      return defaultVehicleComments.filter(c => c.vehicleFolio === "V-1001");
+    }
+    return result.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  } catch (e) {
+    console.error("Firestore getVehicleComments error:", e);
+    return localList.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
+};
+
+export const addVehicleComment = async (commentData) => {
+  const newComment = {
+    id: "com_" + Date.now(),
+    createdAt: new Date().toISOString(),
+    authorRole: commentData.authorRole || "cliente",
+    ...commentData
+  };
+
+  if (useLocalFallback) {
+    const local = JSON.parse(localStorage.getItem("workshop_vehicle_comments") || JSON.stringify(defaultVehicleComments));
+    local.push(newComment);
+    localStorage.setItem("workshop_vehicle_comments", JSON.stringify(local));
+    return newComment;
+  }
+  try {
+    const ref = doc(db, "vehicle_comments", newComment.id);
+    await setDoc(ref, newComment);
+    // Mirror in local storage
+    const local = JSON.parse(localStorage.getItem("workshop_vehicle_comments") || JSON.stringify(defaultVehicleComments));
+    local.push(newComment);
+    localStorage.setItem("workshop_vehicle_comments", JSON.stringify(local));
+    return newComment;
+  } catch (e) {
+    console.error("Firestore addVehicleComment error:", e);
+    const local = JSON.parse(localStorage.getItem("workshop_vehicle_comments") || JSON.stringify(defaultVehicleComments));
+    local.push(newComment);
+    localStorage.setItem("workshop_vehicle_comments", JSON.stringify(local));
+    return newComment;
+  }
+};
+
+

@@ -7,7 +7,8 @@ import {
   Users, 
   LogOut, 
   Wrench,
-  Database
+  Database,
+  Search
 } from 'lucide-react';
 import { resetFirebaseConnection } from '../config/dbService';
 
@@ -18,7 +19,9 @@ const Sidebar = ({ currentView, setView, user, onLogout, isFirebaseConnected }) 
     { id: 'outgoings', label: 'Salidas', icon: ArrowUpRight, roles: ['admin', 'encargado', 'tecnico'] },
     { id: 'reports', label: 'Reportes', icon: BarChart3, roles: ['admin', 'encargado'] },
     { id: 'users', label: 'Usuarios', icon: Users, roles: ['admin', 'encargado'] },
+    { id: 'client-tracking', label: 'Vista Cliente', icon: Search, roles: ['admin', 'encargado', 'tecnico'] },
   ];
+
 
   const filteredItems = menuItems.filter(item => item.roles.includes(user?.role));
 

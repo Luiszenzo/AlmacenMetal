@@ -11,6 +11,7 @@ import Inventory from './views/Inventory';
 import Outgoings from './views/Outgoings';
 import Reports from './views/Reports';
 import Users from './views/Users';
+import ClientTracking from './views/ClientTracking';
 
 // Components
 import Sidebar from './components/Sidebar';
@@ -18,8 +19,10 @@ import Sidebar from './components/Sidebar';
 function App() {
   const [user, setUser] = useState(null);
   const [currentView, setCurrentView] = useState('vehicles');
+  const [showLogin, setShowLogin] = useState(false);
   const [isFirebaseConnected, setIsFirebaseConnected] = useState(false);
   const [loading, setLoading] = useState(true);
+
 
   // Initialize and check Firebase connection status
   useEffect(() => {
@@ -116,9 +119,12 @@ function App() {
     );
   }
 
-  // If user is not authenticated, show Login screen
+  // If user is not authenticated, show Client Tracking Search by default, or Login screen
   if (!user) {
-    return <Login onLoginSuccess={handleLoginSuccess} />;
+    if (showLogin) {
+      return <Login onLoginSuccess={handleLoginSuccess} onOpenClientTracking={() => setShowLogin(false)} />;
+    }
+    return <ClientTracking onBackToLogin={() => setShowLogin(true)} />;
   }
 
   // Render view
@@ -143,10 +149,13 @@ function App() {
           return <Vehicles currentUser={user} />;
         }
         return <Users currentUser={user} />;
+      case 'client-tracking':
+        return <ClientTracking onBackToLogin={() => setCurrentView('vehicles')} />;
       default:
         return <Vehicles currentUser={user} />;
     }
   };
+
 
   return (
     <div className="app-container">

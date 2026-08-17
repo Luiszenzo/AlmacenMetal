@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Search, Calendar, User, Package, Car, ArrowUpRight } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Search, Calendar, User, Package, Car, ArrowUpRight, ChevronDown } from 'lucide-react';
 import { getOutgoingsList, registerOutgoing, getInventoryList, getVehiclesList, getUsersList } from '../config/dbService';
 
 const Outgoings = ({ currentUser }) => {
@@ -19,6 +19,24 @@ const Outgoings = ({ currentUser }) => {
   const [technicianId, setTechnicianId] = useState('');
   const [quantity, setQuantity] = useState(1);
   const [date, setDate] = useState('');
+
+  // Searchable dropdown state
+  const [materialSearch, setMaterialSearch] = useState('');
+  const [materialOpen, setMaterialOpen] = useState(false);
+  const [vehicleSearch, setVehicleSearch] = useState('');
+  const [vehicleOpen, setVehicleOpen] = useState(false);
+
+  const materialRef = useRef(null);
+  const vehicleRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (materialRef.current && !materialRef.current.contains(e.target)) setMaterialOpen(false);
+      if (vehicleRef.current && !vehicleRef.current.contains(e.target)) setVehicleOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
 
@@ -47,7 +65,9 @@ const Outgoings = ({ currentUser }) => {
 
   const handleOpenAdd = () => {
     setMaterialId('');
+    setMaterialSearch('');
     setVehicleFolio('');
+    setVehicleSearch('');
     setTechnicianId('');
     setQuantity(1);
     setDate(new Date().toISOString().slice(0, 16)); // Current local time
@@ -212,21 +232,102 @@ const Outgoings = ({ currentUser }) => {
             {success && <div className="badge badge-success" style={{ width: '100%', marginBottom: '1rem', padding: '0.5rem', boxSizing: 'border-box' }}>{success}</div>}
 
             <form onSubmit={handleSubmit}>
-              <div className="form-group">
+              {/* ── Seleccionar Material (searchable) ── */}
+              <div className="form-group" ref={materialRef} style={{ position: 'relative' }}>
                 <label>Seleccionar Material *</label>
-                <select 
-                  className="select-field" 
-                  value={materialId} 
-                  onChange={(e) => setMaterialId(e.target.value)}
-                  required
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: '8px',
+                    padding: '0 0.75rem',
+                    cursor: 'text',
+                  }}
+                  onClick={() => setMaterialOpen(true)}
                 >
-                  <option value="">-- Elige un repuesto/material --</option>
-                  {inventory.map(item => (
-                    <option key={item.id} value={item.id} disabled={item.quantity === 0}>
-                      {item.code} - {item.name} (Stock: {item.quantity}) {item.quantity === 0 ? '[SIN STOCK]' : ''}
-                    </option>
-                  ))}
-                </select>
+                  <Search size={15} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                  <input
+                    type="text"
+                    placeholder={materialId ? '' : 'Buscar repuesto o material...'}
+                    value={materialOpen ? materialSearch : (selectedMaterialObj ? `${selectedMaterialObj.code} - ${selectedMaterialObj.name}` : '')}
+                    onChange={(e) => { setMaterialSearch(e.target.value); setMaterialOpen(true); }}
+                    onFocus={() => { setMaterialSearch(''); setMaterialOpen(true); }}
+                    style={{
+                      flex: 1,
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.9rem',
+                      padding: '0.65rem 0',
+                    }}
+                    autoComplete="off"
+                  />
+                  <ChevronDown size={15} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: materialOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                </div>
+
+                {materialOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 999,
+                    background: 'var(--panel-bg, #1e2535)',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: '8px',
+                    maxHeight: '220px',
+                    overflowY: 'auto',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                  }}>
+                    {inventory
+                      .filter(item =>
+                        `${item.code} ${item.name}`.toLowerCase().includes(materialSearch.toLowerCase())
+                      )
+                      .map(item => (
+                        <div
+                          key={item.id}
+                          onClick={() => {
+                            if (item.quantity === 0) return;
+                            setMaterialId(item.id);
+                            setMaterialSearch('');
+                            setMaterialOpen(false);
+                          }}
+                          style={{
+                            padding: '0.6rem 0.85rem',
+                            cursor: item.quantity === 0 ? 'not-allowed' : 'pointer',
+                            opacity: item.quantity === 0 ? 0.45 : 1,
+                            borderBottom: '1px solid var(--panel-border)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '0.875rem',
+                            background: materialId === item.id ? 'rgba(99,102,241,0.18)' : 'transparent',
+                            transition: 'background 0.15s',
+                          }}
+                          onMouseEnter={e => { if (item.quantity > 0) e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = materialId === item.id ? 'rgba(99,102,241,0.18)' : 'transparent'; }}
+                        >
+                          <span><strong style={{ color: '#a5b4fc' }}>{item.code}</strong> — {item.name}</span>
+                          <span style={{ fontSize: '0.78rem', color: item.quantity === 0 ? '#ef4444' : item.quantity <= item.minStock ? '#fbbf24' : '#34d399', marginLeft: '0.5rem', flexShrink: 0 }}>
+                            {item.quantity === 0 ? 'SIN STOCK' : `Stock: ${item.quantity}`}
+                          </span>
+                        </div>
+                      ))
+                    }
+                    {inventory.filter(item =>
+                      `${item.code} ${item.name}`.toLowerCase().includes(materialSearch.toLowerCase())
+                    ).length === 0 && (
+                      <div style={{ padding: '0.75rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                        Sin resultados
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {selectedMaterialObj && (
                   <span style={{ fontSize: '0.8rem', color: selectedMaterialObj.quantity <= selectedMaterialObj.minStock ? '#fbbf24' : '#94a3b8', marginTop: '4px', display: 'block' }}>
                     Stock disponible: {selectedMaterialObj.quantity} unidades | Costo: ${selectedMaterialObj.cost.toFixed(2)}
@@ -234,21 +335,97 @@ const Outgoings = ({ currentUser }) => {
                 )}
               </div>
 
-              <div className="form-group">
+              {/* ── Vehículo Destino (searchable) ── */}
+              <div className="form-group" ref={vehicleRef} style={{ position: 'relative' }}>
                 <label>Vehículo Destino (Activos en Taller) *</label>
-                <select 
-                  className="select-field" 
-                  value={vehicleFolio} 
-                  onChange={(e) => setVehicleFolio(e.target.value)}
-                  required
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: '8px',
+                    padding: '0 0.75rem',
+                    cursor: 'text',
+                  }}
+                  onClick={() => setVehicleOpen(true)}
                 >
-                  <option value="">-- Selecciona el Folio del Vehículo --</option>
-                  {vehicles.map(v => (
-                    <option key={v.folio} value={v.folio}>
-                      {v.folio} - {v.plate} ({v.type})
-                    </option>
-                  ))}
-                </select>
+                  <Search size={15} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                  <input
+                    type="text"
+                    placeholder={vehicleFolio ? '' : 'Buscar por folio o placa...'}
+                    value={vehicleOpen ? vehicleSearch : (vehicleFolio ? (() => { const v = vehicles.find(v => v.folio === vehicleFolio); return v ? `${v.folio} - ${v.plate} (${v.type})` : vehicleFolio; })() : '')}
+                    onChange={(e) => { setVehicleSearch(e.target.value); setVehicleOpen(true); }}
+                    onFocus={() => { setVehicleSearch(''); setVehicleOpen(true); }}
+                    style={{
+                      flex: 1,
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.9rem',
+                      padding: '0.65rem 0',
+                    }}
+                    autoComplete="off"
+                  />
+                  <ChevronDown size={15} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: vehicleOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                </div>
+
+                {vehicleOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 999,
+                    background: 'var(--panel-bg, #1e2535)',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: '8px',
+                    maxHeight: '220px',
+                    overflowY: 'auto',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                  }}>
+                    {vehicles
+                      .filter(v =>
+                        `${v.folio} ${v.plate} ${v.type}`.toLowerCase().includes(vehicleSearch.toLowerCase())
+                      )
+                      .map(v => (
+                        <div
+                          key={v.folio}
+                          onClick={() => {
+                            setVehicleFolio(v.folio);
+                            setVehicleSearch('');
+                            setVehicleOpen(false);
+                          }}
+                          style={{
+                            padding: '0.6rem 0.85rem',
+                            cursor: 'pointer',
+                            borderBottom: '1px solid var(--panel-border)',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            fontSize: '0.875rem',
+                            background: vehicleFolio === v.folio ? 'rgba(99,102,241,0.18)' : 'transparent',
+                            transition: 'background 0.15s',
+                          }}
+                          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = vehicleFolio === v.folio ? 'rgba(99,102,241,0.18)' : 'transparent'; }}
+                        >
+                          <span><strong style={{ color: '#a5b4fc' }}>{v.folio}</strong> — {v.plate}</span>
+                          <span style={{ fontSize: '0.78rem', color: '#94a3b8', marginLeft: '0.5rem' }}>{v.type}</span>
+                        </div>
+                      ))
+                    }
+                    {vehicles.filter(v =>
+                      `${v.folio} ${v.plate} ${v.type}`.toLowerCase().includes(vehicleSearch.toLowerCase())
+                    ).length === 0 && (
+                      <div style={{ padding: '0.75rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                        Sin resultados
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="form-group">

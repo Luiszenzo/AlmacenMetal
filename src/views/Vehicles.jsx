@@ -3,8 +3,9 @@ import {
   Plus, Search, Car, Truck, Bike, Calendar, FileText,
   Settings, CheckCircle, XCircle, ChevronRight, Upload,
   AlertCircle, ClipboardList, Wrench, Package, BookOpen,
-  PlusCircle, Camera, X, Eye, Hammer, Cog, Clock,
-  CheckSquare, ShoppingCart, Info, Edit3, Save, Trash2
+  PlusCircle, Camera, X, Eye, EyeOff, Hammer, Cog, Clock,
+  CheckSquare, ShoppingCart, Info, Edit3, Save, Trash2,
+  MessageSquare, Send
 } from 'lucide-react';
 import {
   getVehiclesList,
@@ -13,7 +14,11 @@ import {
   getOutgoingsList,
   getVehicleUpdates,
   saveVehicleUpdate,
-  saveOrderedPart
+  deleteVehicleUpdate,
+  updateVehicleUpdate,
+  saveOrderedPart,
+  getVehicleComments,
+  addVehicleComment
 } from '../config/dbService';
 import { generateVehiclePDF, generateGeneralPDF } from '../utils/reports';
 import JSZip from 'jszip';
@@ -201,7 +206,24 @@ const Vehicles = ({ currentUser }) => {
   const [partNotes, setPartNotes] = useState('');
   const [savingPart, setSavingPart] = useState(false);
 
+  // Client comments
+  const [vehicleComments, setVehicleComments] = useState([]);
+  const [staffCommentText, setStaffCommentText] = useState('');
+  const [sendingStaffComment, setSendingStaffComment] = useState(false);
+
+  // Progress slider (local drag state, synced to selectedVehicle.serviceProgress)
+  const [sliderProgress, setSliderProgress] = useState(0);
+
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
+
+  const loadVehicleComments = async (folio) => {
+    try {
+      const coms = await getVehicleComments(folio);
+      setVehicleComments(coms);
+    } catch (e) {
+      console.error("Error loading comments:", e);
+    }
+  };
 
   // ---- Data Loading ----
   const loadData = useCallback(async () => {
@@ -219,7 +241,7 @@ const Vehicles = ({ currentUser }) => {
 
   useEffect(() => { loadData(); }, [loadData]);
 
-  const loadVehicleUpdates = useCallback(async (folio) => {
+  const loadVehicleUpdates = async (folio) => {
     setUpdatesLoading(true);
     try {
       const updates = await getVehicleUpdates(folio);
@@ -229,7 +251,7 @@ const Vehicles = ({ currentUser }) => {
     } finally {
       setUpdatesLoading(false);
     }
-  }, []);
+  };
 
   // ---- Open Modals ----
   const handleOpenAdd = () => {
@@ -278,6 +300,12 @@ const Vehicles = ({ currentUser }) => {
     setShowAddPartForm(false);
     setShowDetailModal(true);
     loadVehicleUpdates(v.folio);
+    // Sync slider with saved progress or derive from status
+    const savedProgress = typeof v.serviceProgress === 'number' ? v.serviceProgress
+      : (!v.active || v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado') ? 100
+      : (v.mechanicsStatus === 'en_proceso' || v.bodyworkStatus === 'en_proceso') ? 60
+      : 0;
+    setSliderProgress(savedProgress);
   };
 
   // ---- Photo Handling (soporta imágenes individuales y archivos .ZIP) ----
@@ -428,14 +456,15 @@ const Vehicles = ({ currentUser }) => {
   };
 
   // ---- Process Status Update (from detail modal) ----
-  const handleUpdateProcessStatus = async (field, value) => {
-    if (!selectedVehicle || !isEditable) return;
+  const handleUpdateProcessStatus = async (fieldOrObj, value) => {
+    if (!selectedVehicle) return;
     try {
-      const updated = { ...selectedVehicle, [field]: value };
-      await saveVehicle(updated);
+      const payload = typeof fieldOrObj === 'object' ? fieldOrObj : { [fieldOrObj]: value };
+      const updated = { ...selectedVehicle, ...payload };
       setSelectedVehicle(updated);
       setVehicles(prev => prev.map(v => v.folio === updated.folio ? updated : v));
-    } catch (err) { console.error(err); }
+      await saveVehicle(updated);
+    } catch (err) { console.error("Error al actualizar estatus de proceso:", err); }
   };
 
   // ---- Bitácora: Guardar Carpeta ----
@@ -449,6 +478,7 @@ const Vehicles = ({ currentUser }) => {
         name: newFolderName.trim(),
         description: newFolderDesc.trim(),
         createdBy: currentUser?.name || 'Usuario',
+        publicVisible: true,
       });
       setNewFolderName('');
       setNewFolderDesc('');
@@ -474,6 +504,7 @@ const Vehicles = ({ currentUser }) => {
         note: newEntryNote.trim(),
         photos: newEntryPhotos,
         createdBy: currentUser?.name || 'Usuario',
+        publicVisible: true,
       });
       setNewEntryNote('');
       setNewEntryPhotos([]);
@@ -547,9 +578,10 @@ const Vehicles = ({ currentUser }) => {
     if (statusFilter === 'activo') matchesStatus = v.active;
     if (statusFilter === 'inactivo') matchesStatus = !v.active;
     let matchesProcess = true;
-    if (processFilter === 'hojalateria') matchesProcess = v.bodyworkStatus === 'en_proceso';
-    if (processFilter === 'mecanica') matchesProcess = v.mechanicsStatus === 'en_proceso';
-    if (processFilter === 'terminado') matchesProcess = v.bodyworkStatus === 'terminado' && v.mechanicsStatus === 'terminado';
+    const currentStat = v.mechanicsStatus || v.bodyworkStatus || 'pendiente';
+    if (processFilter === 'pendiente') matchesProcess = currentStat === 'pendiente';
+    if (processFilter === 'en_proceso') matchesProcess = currentStat === 'en_proceso';
+    if (processFilter === 'terminado') matchesProcess = currentStat === 'terminado' || !v.active;
     return matchesSearch && matchesType && matchesStatus && matchesProcess;
   });
 
@@ -578,10 +610,31 @@ const Vehicles = ({ currentUser }) => {
   // ---- Render Tabs ----
   const renderInfoTab = () => (
     <div>
-      {/* Photo Gallery */}
-      <h4 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Fotografías del Vehículo
-      </h4>
+      {/* Photo Gallery Header with Client Visibility Switch */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+        <h4 style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', fontWeight: 600, margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          Fotografías de Recepción / Cómo llegó
+        </h4>
+        <button
+          type="button"
+          className="btn btn-sm"
+          style={{
+            padding: '0.2rem 0.55rem',
+            fontSize: '0.72rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            background: selectedVehicle.showInitialPhotosToClient !== false ? 'rgba(16,185,129,0.15)' : 'rgba(100,116,139,0.2)',
+            border: `1px solid ${selectedVehicle.showInitialPhotosToClient !== false ? 'rgba(16,185,129,0.4)' : 'rgba(100,116,139,0.4)'}`,
+            color: selectedVehicle.showInitialPhotosToClient !== false ? '#34d399' : '#94a3b8'
+          }}
+          onClick={() => handleUpdateProcessStatus('showInitialPhotosToClient', selectedVehicle.showInitialPhotosToClient === false ? true : false)}
+          title="Controlar si el cliente puede ver estas fotos en su portal"
+        >
+          {selectedVehicle.showInitialPhotosToClient !== false ? <Eye size={12} /> : <EyeOff size={12} />}
+          <span>{selectedVehicle.showInitialPhotosToClient !== false ? 'Fotos Visibles al Cliente' : 'Fotos Ocultas al Cliente'}</span>
+        </button>
+      </div>
       {(selectedVehicle.imageUrls || []).length > 0 ? (
         <div className="photo-gallery" style={{ marginBottom: '1rem' }}>
           {(selectedVehicle.imageUrls || []).map((url, i) => (
@@ -724,47 +777,136 @@ const Vehicles = ({ currentUser }) => {
     </div>
   );
 
-  const renderProcessTab = () => (
-    <div>
-      {/* Hojalatería */}
-      <div className="process-section">
-        <div className="process-section-header">
-          <div className="process-section-title">
-            <Hammer size={18} style={{ color: '#fbbf24' }} />
-            <span>Hojalatería</span>
-          </div>
-          <ProcessStatusSelector
-            value={selectedVehicle.bodyworkStatus || 'pendiente'}
-            onChange={(v) => handleUpdateProcessStatus('bodyworkStatus', v)}
-            disabled={!isEditable}
-          />
-        </div>
-        <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-          Estado actual: <span className={`process-badge ${selectedVehicle.bodyworkStatus || 'pendiente'}`} style={{ cursor: 'default', fontSize: '0.8rem' }}>
-            {PROCESS_LABELS[selectedVehicle.bodyworkStatus || 'pendiente']}
-          </span>
-        </div>
-      </div>
+  const renderProcessTab = () => {
+    const pct = sliderProgress;
+    const getSliderColor = (v) => {
+      if (v <= 0) return '#64748b';
+      if (v < 40) return '#ef4444';
+      if (v < 75) return '#3b82f6';
+      return '#10b981';
+    };
+    const getStatusLabel = (v) => {
+      if (v === 0) return 'Sin iniciar';
+      if (v < 25) return 'Diagnóstico';
+      if (v < 50) return 'En proceso inicial';
+      if (v < 75) return 'Avance intermedio';
+      if (v < 100) return 'Casi terminado';
+      return 'Terminado';
+    };
 
-      {/* Mecánica */}
-      <div className="process-section">
-        <div className="process-section-header">
-          <div className="process-section-title">
-            <Cog size={18} style={{ color: '#60a5fa' }} />
-            <span>Mecánica</span>
+    return (
+      <div>
+        {/* Avance General del Servicio */}
+        <div className="process-section" style={{ padding: '1.25rem', background: 'rgba(15, 23, 42, 0.6)', border: '1px solid var(--panel-border)', borderRadius: '12px', marginBottom: '1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Clock size={20} style={{ color: 'var(--primary)' }} />
+              <span style={{ fontWeight: 600, fontSize: '1rem' }}>Avance General del Servicio</span>
+            </div>
+            <span style={{
+              fontSize: '1.6rem',
+              fontWeight: 800,
+              color: getSliderColor(pct),
+              minWidth: '4ch',
+              textAlign: 'right',
+              transition: 'color 0.3s ease'
+            }}>
+              {pct}%
+            </span>
           </div>
-          <ProcessStatusSelector
-            value={selectedVehicle.mechanicsStatus || 'pendiente'}
-            onChange={(v) => handleUpdateProcessStatus('mechanicsStatus', v)}
-            disabled={!isEditable}
-          />
+
+          {/* Interactive Slider */}
+          <div style={{ position: 'relative', marginBottom: '1rem' }}>
+            <style>{`
+              .progress-slider {
+                -webkit-appearance: none;
+                appearance: none;
+                width: 100%;
+                height: 12px;
+                border-radius: 6px;
+                outline: none;
+                cursor: pointer;
+                background: linear-gradient(
+                  to right,
+                  var(--slider-fill, #00d2ff) 0%,
+                  var(--slider-fill, #00d2ff) var(--slider-pct, 0%),
+                  rgba(255,255,255,0.1) var(--slider-pct, 0%),
+                  rgba(255,255,255,0.1) 100%
+                );
+                transition: height 0.15s ease;
+              }
+              .progress-slider:hover { height: 16px; }
+              .progress-slider::-webkit-slider-thumb {
+                -webkit-appearance: none;
+                appearance: none;
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
+                background: white;
+                cursor: grab;
+                box-shadow: 0 2px 12px rgba(0,0,0,0.5), 0 0 0 3px rgba(99,179,237,0.4);
+                transition: transform 0.15s ease, box-shadow 0.15s ease;
+              }
+              .progress-slider::-webkit-slider-thumb:active {
+                cursor: grabbing;
+                transform: scale(1.2);
+                box-shadow: 0 4px 20px rgba(0,0,0,0.6), 0 0 0 5px rgba(99,179,237,0.5);
+              }
+              .progress-slider::-moz-range-thumb {
+                width: 28px;
+                height: 28px;
+                border-radius: 50%;
+                background: white;
+                cursor: grab;
+                border: none;
+                box-shadow: 0 2px 12px rgba(0,0,0,0.5);
+              }
+            `}</style>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={pct}
+              className="progress-slider"
+              style={{
+                '--slider-pct': `${pct}%`,
+                '--slider-fill': pct < 40 ? '#ef4444' : pct < 75 ? '#3b82f6' : '#00d2ff',
+              }}
+              onChange={e => setSliderProgress(Number(e.target.value))}
+              onMouseUp={e => {
+                const val = Number(e.target.value);
+                handleUpdateProcessStatus({
+                  serviceProgress: val,
+                  mechanicsStatus: val === 0 ? 'pendiente' : val === 100 ? 'terminado' : 'en_proceso',
+                  bodyworkStatus:  val === 0 ? 'pendiente' : val === 100 ? 'terminado' : 'en_proceso',
+                });
+              }}
+              onTouchEnd={e => {
+                const val = Number(e.target.value);
+                handleUpdateProcessStatus({
+                  serviceProgress: val,
+                  mechanicsStatus: val === 0 ? 'pendiente' : val === 100 ? 'terminado' : 'en_proceso',
+                  bodyworkStatus:  val === 0 ? 'pendiente' : val === 100 ? 'terminado' : 'en_proceso',
+                });
+              }}
+            />
+            {/* Tick marks */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '0.35rem', paddingInline: '2px' }}>
+              {[0, 25, 50, 75, 100].map(tick => (
+                <div key={tick} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                  <div style={{ width: '1px', height: '5px', background: pct >= tick ? (pct < 40 ? '#ef4444' : pct < 75 ? '#3b82f6' : '#00d2ff') : 'rgba(255,255,255,0.2)' }} />
+                  <span style={{ fontSize: '0.65rem', color: pct >= tick ? 'var(--text-secondary)' : 'rgba(255,255,255,0.2)' }}>{tick}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Estado: <strong style={{ color: 'white' }}>{getStatusLabel(pct)}</strong></span>
+            <span style={{ fontSize: '0.75rem', opacity: 0.6 }}>Arrastra para actualizar el avance</span>
+          </div>
         </div>
-        <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-          Estado actual: <span className={`process-badge ${selectedVehicle.mechanicsStatus || 'pendiente'}`} style={{ cursor: 'default', fontSize: '0.8rem' }}>
-            {PROCESS_LABELS[selectedVehicle.mechanicsStatus || 'pendiente']}
-          </span>
-        </div>
-      </div>
 
       {/* Materials Summary */}
       <div className="section-divider" />
@@ -812,6 +954,7 @@ const Vehicles = ({ currentUser }) => {
       )}
     </div>
   );
+};
 
   const renderPartsTab = () => {
     const orderedParts = selectedVehicle.orderedParts || [];
@@ -848,12 +991,33 @@ const Vehicles = ({ currentUser }) => {
 
         <div className="section-divider" />
 
-        {/* Piezas Encargadas / Pedidas */}
+        {/* Piezas Encargadas / Pedidas Header with Client Visibility Switch */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-          <h4 style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <ShoppingCart size={16} style={{ color: '#fbbf24' }} />
-            Piezas Encargadas / Pedidas
-          </h4>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <h4 style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+              <ShoppingCart size={16} style={{ color: '#fbbf24' }} />
+              Piezas Encargadas / Pedidas
+            </h4>
+            <button
+              type="button"
+              className="btn btn-sm"
+              style={{
+                padding: '0.15rem 0.5rem',
+                fontSize: '0.72rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.3rem',
+                background: selectedVehicle.showPartsToClient !== false ? 'rgba(16,185,129,0.15)' : 'rgba(100,116,139,0.2)',
+                border: `1px solid ${selectedVehicle.showPartsToClient !== false ? 'rgba(16,185,129,0.4)' : 'rgba(100,116,139,0.4)'}`,
+                color: selectedVehicle.showPartsToClient !== false ? '#34d399' : '#94a3b8'
+              }}
+              onClick={() => handleUpdateProcessStatus('showPartsToClient', selectedVehicle.showPartsToClient === false ? true : false)}
+              title="Controlar si el cliente puede ver la lista de refacciones en su portal"
+            >
+              {selectedVehicle.showPartsToClient !== false ? <Eye size={12} /> : <EyeOff size={12} />}
+              <span>{selectedVehicle.showPartsToClient !== false ? 'Piezas Visibles al Cliente' : 'Piezas Ocultas al Cliente'}</span>
+            </button>
+          </div>
           {isEditable && (
             <button className="btn btn-secondary btn-sm" onClick={() => setShowAddPartForm(p => !p)}>
               <PlusCircle size={14} />
@@ -1043,6 +1207,28 @@ const Vehicles = ({ currentUser }) => {
                       <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', background: 'rgba(255,255,255,0.06)', borderRadius: '20px', padding: '0.15rem 0.5rem' }}>
                         {folderEntries.length} {folderEntries.length === 1 ? 'entrada' : 'entradas'}
                       </span>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{
+                          padding: '0.2rem 0.55rem',
+                          fontSize: '0.72rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.3rem',
+                          background: folder.publicVisible !== false ? 'rgba(16,185,129,0.15)' : 'rgba(100,116,139,0.2)',
+                          border: `1px solid ${folder.publicVisible !== false ? 'rgba(16,185,129,0.4)' : 'rgba(100,116,139,0.4)'}`,
+                          color: folder.publicVisible !== false ? '#34d399' : '#94a3b8'
+                        }}
+                        onClick={e => {
+                          e.stopPropagation();
+                          handleToggleFolderVisibility(folder);
+                        }}
+                        title={folder.publicVisible !== false ? 'Visible para el cliente (clic para ocultar carpeta)' : 'Oculto para el cliente (clic para hacer visible)'}
+                      >
+                        {folder.publicVisible !== false ? <Eye size={12} /> : <EyeOff size={12} />}
+                        <span>{folder.publicVisible !== false ? 'Cliente: Visible' : 'Cliente: Oculto'}</span>
+                      </button>
                       {isEditable && (
                         <button
                           className="btn btn-secondary btn-sm"
@@ -1058,6 +1244,17 @@ const Vehicles = ({ currentUser }) => {
                           <PlusCircle size={12} /><span>{isAddingEntry ? 'Cancelar' : '+ Entrada'}</span>
                         </button>
                       )}
+                      <button
+                        className="btn btn-danger btn-sm"
+                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.75rem' }}
+                        onClick={e => {
+                          e.stopPropagation();
+                          handleDeleteFolder(folder);
+                        }}
+                        title="Eliminar carpeta completa"
+                      >
+                        <Trash2 size={12} />
+                      </button>
                       <ChevronRight size={16} style={{ color: 'var(--text-secondary)', transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s' }} />
                     </div>
                   </div>
@@ -1120,13 +1317,44 @@ const Vehicles = ({ currentUser }) => {
                             <div key={entry.id} className="timeline-item">
                               <div className="timeline-dot" />
                               <div className="timeline-card">
-                                <div className="timeline-header">
-                                  <span className="timeline-date">
-                                    {new Date(entry.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
-                                    {' — '}
-                                    {new Date(entry.createdAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
-                                  </span>
-                                  <span className="timeline-author">{entry.createdBy}</span>
+                                <div className="timeline-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <div>
+                                    <span className="timeline-date">
+                                      {new Date(entry.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                                      {' — '}
+                                      {new Date(entry.createdAt).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                    <span className="timeline-author" style={{ marginLeft: '0.5rem' }}>{entry.createdBy}</span>
+                                  </div>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); handleToggleEntryVisibility(entry); }}
+                                      style={{
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: entry.publicVisible !== false ? '#34d399' : '#64748b',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        fontSize: '0.72rem',
+                                        padding: '2px 4px'
+                                      }}
+                                      title={entry.publicVisible !== false ? 'Visible para cliente (clic para ocultar)' : 'Oculto para cliente (clic para mostrar)'}
+                                    >
+                                      {entry.publicVisible !== false ? <Eye size={13} /> : <EyeOff size={13} />}
+                                      <span>{entry.publicVisible !== false ? 'Visible' : 'Oculto'}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.stopPropagation(); handleDeleteEntry(entry); }}
+                                      style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', opacity: 0.85, padding: '2px' }}
+                                      title="Eliminar esta entrada de la bitácora"
+                                    >
+                                      <Trash2 size={13} />
+                                    </button>
+                                  </div>
                                 </div>
                                 <p style={{ fontSize: '0.9rem', lineHeight: 1.65, marginTop: '0.25rem' }}>{entry.note}</p>
                                 {(entry.photos || []).length > 0 && (
@@ -1163,12 +1391,43 @@ const Vehicles = ({ currentUser }) => {
                       <div key={u.id} className="timeline-item">
                         <div className="timeline-dot" />
                         <div className="timeline-card">
-                          <div className="timeline-header">
-                            <span className="timeline-date">{new Date(u.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                            <span className="timeline-author">{u.technicianName}</span>
+                          <div className="timeline-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <span className="timeline-date">{new Date(u.createdAt).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                              <span className="timeline-author" style={{ marginLeft: '0.5rem' }}>{u.technicianName}</span>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleToggleEntryVisibility(u); }}
+                                style={{
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: u.publicVisible !== false ? '#34d399' : '#64748b',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '0.72rem',
+                                  padding: '2px 4px'
+                                }}
+                                title={u.publicVisible !== false ? 'Visible para cliente' : 'Oculto para cliente'}
+                              >
+                                {u.publicVisible !== false ? <Eye size={13} /> : <EyeOff size={13} />}
+                                <span>{u.publicVisible !== false ? 'Visible' : 'Oculto'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteEntry(u); }}
+                                style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', opacity: 0.85, padding: '2px' }}
+                                title="Eliminar registro"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
                           </div>
                           <div className="timeline-notes">
-                            {u.bodyworkNote && <div className="timeline-note-row"><span className="timeline-note-label"><Hammer size={11} style={{ display: 'inline', marginRight: 3 }} />Hojalatería:</span><span className="timeline-note-text">{u.bodyworkNote}</span></div>}
+                            {u.bodyworkNote && <div className="timeline-note-row"><span className="timeline-note-label"><Clock size={11} style={{ display: 'inline', marginRight: 3 }} />Avance Servicio:</span><span className="timeline-note-text">{u.bodyworkNote}</span></div>}
                             {u.mechanicsNote && <div className="timeline-note-row"><span className="timeline-note-label"><Cog size={11} style={{ display: 'inline', marginRight: 3 }} />Mecánica:</span><span className="timeline-note-text">{u.mechanicsNote}</span></div>}
                             {u.generalNote && <div className="timeline-note-row"><span className="timeline-note-label"><BookOpen size={11} style={{ display: 'inline', marginRight: 3 }} />General:</span><span className="timeline-note-text">{u.generalNote}</span></div>}
                           </div>
@@ -1192,6 +1451,139 @@ const Vehicles = ({ currentUser }) => {
     );
   };
 
+  const handleToggleFolderVisibility = async (folder) => {
+    const newVis = folder.publicVisible === false ? true : false;
+    try {
+      await updateVehicleUpdate(folder.id, { publicVisible: newVis });
+      setVehicleUpdates(prev => prev.map(u => u.id === folder.id ? { ...u, publicVisible: newVis } : u));
+    } catch (err) {
+      console.error("Error al cambiar visibilidad de carpeta:", err);
+    }
+  };
+
+  const handleToggleEntryVisibility = async (entry) => {
+    const newVis = entry.publicVisible === false ? true : false;
+    try {
+      await updateVehicleUpdate(entry.id, { publicVisible: newVis });
+      setVehicleUpdates(prev => prev.map(u => u.id === entry.id ? { ...u, publicVisible: newVis } : u));
+    } catch (err) {
+      console.error("Error al cambiar visibilidad de entrada:", err);
+    }
+  };
+
+  const handleDeleteFolder = async (folder) => {
+    if (!window.confirm(`¿Seguro que deseas eliminar la carpeta "${folder.name}" y todo su contenido?`)) return;
+    try {
+      await deleteVehicleUpdate(folder.id);
+      setVehicleUpdates(prev => prev.filter(u => u.id !== folder.id && u.folderId !== folder.id));
+    } catch (err) {
+      console.error("Error al eliminar carpeta:", err);
+    }
+  };
+
+  const handleDeleteEntry = async (entry) => {
+    if (!window.confirm("¿Seguro que deseas eliminar esta entrada de bitácora?")) return;
+    try {
+      await deleteVehicleUpdate(entry.id);
+      setVehicleUpdates(prev => prev.filter(u => u.id !== entry.id));
+    } catch (err) {
+      console.error("Error al eliminar entrada:", err);
+    }
+  };
+
+  const handleStaffSendComment = async (e) => {
+    e.preventDefault();
+    if (!staffCommentText.trim() || !selectedVehicle) return;
+    setSendingStaffComment(true);
+    try {
+      const newCom = await addVehicleComment({
+        vehicleFolio: selectedVehicle.folio,
+        authorName: currentUser?.name ? `${currentUser.name} (Taller)` : 'Taller Metal Shapers',
+        authorRole: 'taller',
+        contact: '',
+        text: staffCommentText.trim()
+      });
+      setVehicleComments(prev => [newCom, ...prev]);
+      setStaffCommentText('');
+    } catch (err) {
+      console.error("Error sending staff comment:", err);
+    } finally {
+      setSendingStaffComment(false);
+    }
+  };
+
+  const renderCommentsTab = () => (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        <h4 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+          <MessageSquare size={16} style={{ color: 'var(--primary)' }} />
+          Comentarios y Consultas de Clientes ({vehicleComments.length})
+        </h4>
+        <button
+          className="btn btn-secondary btn-sm"
+          onClick={() => loadVehicleComments(selectedVehicle?.folio)}
+          style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem' }}
+        >
+          <Clock size={13} /> <span>Actualizar</span>
+        </button>
+      </div>
+
+      {/* Form para responder al cliente */}
+      <form onSubmit={handleStaffSendComment} style={{ marginBottom: '1.25rem', background: 'rgba(15, 23, 42, 0.6)', padding: '1rem', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+        <label style={{ display: 'block', fontSize: '0.82rem', color: '#94a3b8', marginBottom: '0.35rem', fontWeight: 500 }}>
+          Responder o Agregar Comentario Oficial del Taller:
+        </label>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <input
+            type="text"
+            className="input-field"
+            placeholder="Escribe una respuesta visible para el cliente..."
+            value={staffCommentText}
+            onChange={(e) => setStaffCommentText(e.target.value)}
+            style={{ flexGrow: 1 }}
+          />
+          <button type="submit" className="btn btn-primary btn-sm" disabled={sendingStaffComment} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <Send size={14} /> <span>Enviar</span>
+          </button>
+        </div>
+      </form>
+
+      {vehicleComments.length === 0 ? (
+        <div style={{ background: 'rgba(15,23,42,0.3)', borderRadius: '10px', padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)', border: '1px solid var(--panel-border)' }}>
+          <MessageSquare size={32} style={{ marginBottom: '0.5rem', opacity: 0.3 }} />
+          <p style={{ margin: 0, fontSize: '0.88rem' }}>No hay comentarios registrados por el cliente aún para este vehículo.</p>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {vehicleComments.map(com => (
+            <div key={com.id} style={{
+              padding: '0.85rem 1rem',
+              borderRadius: '10px',
+              background: com.authorRole === 'taller' ? 'rgba(0, 210, 255, 0.08)' : 'rgba(15, 23, 42, 0.5)',
+              border: com.authorRole === 'taller' ? '1px solid rgba(0, 210, 255, 0.25)' : '1px solid rgba(255, 255, 255, 0.08)',
+              marginLeft: com.authorRole === 'taller' ? '1rem' : '0'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem' }}>
+                <span style={{ fontWeight: 600, fontSize: '0.85rem', color: com.authorRole === 'taller' ? 'var(--primary)' : '#fff' }}>
+                  {com.authorName} <span className={`badge ${com.authorRole === 'taller' ? 'badge-info' : 'badge-warning'}`} style={{ fontSize: '0.7rem', padding: '1px 6px', marginLeft: '6px' }}>{com.authorRole === 'taller' ? 'Respuesta Taller' : 'Cliente'}</span>
+                </span>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                  {com.createdAt ? new Date(com.createdAt).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' }) : ''}
+                </span>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: '#e2e8f0', margin: 0 }}>{com.text}</p>
+              {com.contact && (
+                <span style={{ fontSize: '0.75rem', color: '#64748b', display: 'block', marginTop: '0.2rem' }}>
+                  Contacto: {com.contact}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   // ---- Main Render ----
   return (
     <div>
@@ -1208,7 +1600,7 @@ const Vehicles = ({ currentUser }) => {
         <div>
           <h1 className="page-title">Gestión de Vehículos</h1>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginTop: '0.25rem' }}>
-            Seguimiento completo del proceso de reparación — Hojalatería, Mecánica y Bitácora diaria.
+            Seguimiento completo del proceso de reparación — Avance General y Bitácora diaria.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
@@ -1228,8 +1620,8 @@ const Vehicles = ({ currentUser }) => {
         {[
           { label: 'Total Vehículos', value: vehicles.length, color: 'primary' },
           { label: 'En Taller', value: vehicles.filter(v => v.active).length, color: 'warning' },
-          { label: 'Hojalatería Activa', value: vehicles.filter(v => v.bodyworkStatus === 'en_proceso').length, color: 'secondary' },
-          { label: 'Mecánica Activa', value: vehicles.filter(v => v.mechanicsStatus === 'en_proceso').length, color: 'success' },
+          { label: 'Servicios en Proceso', value: vehicles.filter(v => (v.mechanicsStatus === 'en_proceso' || v.bodyworkStatus === 'en_proceso') && v.active).length, color: 'secondary' },
+          { label: 'Servicios Terminados', value: vehicles.filter(v => v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado' || !v.active).length, color: 'success' },
         ].map(s => (
           <div key={s.label} className="glass-panel stat-card">
             <div className={`stat-icon ${s.color}`}>
@@ -1268,9 +1660,9 @@ const Vehicles = ({ currentUser }) => {
         </select>
         <select className="select-field" value={processFilter} onChange={e => setProcessFilter(e.target.value)} style={{ maxWidth: '160px' }}>
           <option value="">Todos los Procesos</option>
-          <option value="hojalateria">Hojalatería Activa</option>
-          <option value="mecanica">Mecánica Activa</option>
-          <option value="terminado">Ambos Terminados</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="en_proceso">En Proceso</option>
+          <option value="terminado">Terminados</option>
         </select>
       </div>
 
@@ -1317,14 +1709,33 @@ const Vehicles = ({ currentUser }) => {
                     </div>
                   </div>
 
-                  {/* Process mini badges */}
-                  <div className="vehicle-card-process-bar">
-                    <span className={`process-mini-badge ${v.bodyworkStatus || 'pendiente'}`}>
-                      🔨 {PROCESS_LABELS[v.bodyworkStatus || 'pendiente']}
-                    </span>
-                    <span className={`process-mini-badge ${v.mechanicsStatus || 'pendiente'}`}>
-                      ⚙️ {PROCESS_LABELS[v.mechanicsStatus || 'pendiente']}
-                    </span>
+                  {/* Avance General del Servicio */}
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.78rem', marginBottom: '0.35rem' }}>
+                      <span style={{ color: 'var(--text-secondary)', fontWeight: 500 }}>Avance General</span>
+                      <span style={{ fontWeight: 700, color: '#00d2ff' }}>
+                        {typeof v.serviceProgress === 'number' ? v.serviceProgress
+                          : (!v.active || v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado') ? 100
+                          : (v.mechanicsStatus === 'en_proceso' || v.bodyworkStatus === 'en_proceso') ? 60
+                          : 0}%
+                      </span>
+                    </div>
+                    <div style={{ width: '100%', height: '6px', background: 'rgba(255, 255, 255, 0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                      {(() => {
+                        const cardPct = typeof v.serviceProgress === 'number' ? v.serviceProgress
+                          : (!v.active || v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado') ? 100
+                          : (v.mechanicsStatus === 'en_proceso' || v.bodyworkStatus === 'en_proceso') ? 60 : 0;
+                        return (
+                          <div style={{
+                            height: '100%',
+                            width: `${cardPct}%`,
+                            background: cardPct < 40 ? 'linear-gradient(90deg, #ef4444, #f59e0b)' : cardPct < 75 ? 'linear-gradient(90deg, #3b82f6, #00d2ff)' : 'linear-gradient(90deg, #00d2ff, #10b981)',
+                            borderRadius: '3px',
+                            transition: 'width 0.4s ease'
+                          }} />
+                        );
+                      })()}
+                    </div>
                   </div>
 
                   <p className="vehicle-card-detail">{v.details || 'Sin detalles'}</p>
@@ -1465,19 +1876,17 @@ const Vehicles = ({ currentUser }) => {
               </div>
 
               {/* Process status */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div className="form-group">
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <Hammer size={13} /> Estado de Hojalatería
-                  </label>
-                  <ProcessStatusSelector value={formBodyworkStatus} onChange={setFormBodyworkStatus} />
-                </div>
-                <div className="form-group">
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    <Cog size={13} /> Estado de Mecánica
-                  </label>
-                  <ProcessStatusSelector value={formMechanicsStatus} onChange={setFormMechanicsStatus} />
-                </div>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', marginBottom: '0.5rem' }}>
+                  <Clock size={13} style={{ color: 'var(--primary)' }} /> Estatus del Servicio / Avance General
+                </label>
+                <ProcessStatusSelector
+                  value={formMechanicsStatus || formBodyworkStatus}
+                  onChange={(v) => {
+                    setFormMechanicsStatus(v);
+                    setFormBodyworkStatus(v);
+                  }}
+                />
               </div>
 
               {/* Vehicle Photos — ilimitadas */}
@@ -1672,7 +2081,7 @@ const Vehicles = ({ currentUser }) => {
                       <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#34d399' }}>
                         {formImageUrls.length} fotos cargadas
                       </span>
-                    </div>
+</div>
 
                     <div style={{ height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
                       <div style={{
@@ -1697,7 +2106,7 @@ const Vehicles = ({ currentUser }) => {
         </div>
       )}
 
-      {/* ====== DETAIL MODAL — 4 TABS ====== */}
+      {/* ====== DETAIL MODAL — 5 TABS ====== */}
       {showDetailModal && selectedVehicle && (
         <div className="modal-overlay">
           <div className="glass-panel modal-content-wide">
@@ -1728,11 +2137,17 @@ const Vehicles = ({ currentUser }) => {
                 { id: 'process', label: 'Proceso de Reparación', icon: <Wrench size={14} /> },
                 { id: 'parts', label: 'Piezas', icon: <Package size={14} /> },
                 { id: 'bitacora', label: 'Bitácora Diaria', icon: <BookOpen size={14} /> },
+                { id: 'comments', label: 'Comentarios Cliente', icon: <MessageSquare size={14} /> },
               ].map(t => (
                 <button
                   key={t.id}
                   className={`tab-btn ${activeTab === t.id ? 'active' : ''}`}
-                  onClick={() => setActiveTab(t.id)}
+                  onClick={() => {
+                    setActiveTab(t.id);
+                    if (t.id === 'comments' && selectedVehicle) {
+                      loadVehicleComments(selectedVehicle.folio);
+                    }
+                  }}
                 >
                   {t.icon} {t.label}
                 </button>
@@ -1745,6 +2160,7 @@ const Vehicles = ({ currentUser }) => {
               {activeTab === 'process' && renderProcessTab()}
               {activeTab === 'parts' && renderPartsTab()}
               {activeTab === 'bitacora' && renderBitacoraTab()}
+              {activeTab === 'comments' && renderCommentsTab()}
             </div>
           </div>
         </div>
