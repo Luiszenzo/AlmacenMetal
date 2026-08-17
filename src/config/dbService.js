@@ -301,13 +301,6 @@ export const getInventoryList = async () => {
     querySnapshot.forEach((doc) => {
       items.push({ id: doc.id, ...doc.data() });
     });
-    // Seed database if empty
-    if (items.length === 0) {
-      for (const item of defaultInventory) {
-        await setDoc(doc(db, "inventory", item.id), item);
-        items.push(item);
-      }
-    }
     return items;
   } catch (e) {
     console.error("Firestore getInventoryList error:", e);
@@ -540,13 +533,6 @@ export const getOutgoingsList = async () => {
     querySnapshot.forEach((doc) => {
       list.push({ id: doc.id, ...doc.data() });
     });
-    // Seed
-    if (list.length === 0) {
-      for (const o of defaultOutgoings) {
-        await setDoc(doc(db, "outgoings", o.id), o);
-        list.push(o);
-      }
-    }
     return list.sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort by date descending
   } catch (e) {
     console.error("Firestore getOutgoingsList error:", e);
