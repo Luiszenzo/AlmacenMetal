@@ -60,8 +60,8 @@ export const generateInventoryPDF = (items) => {
   
   // Stats summary in PDF
   const totalItems = items.length;
-  const lowStockItems = items.filter(i => i.quantity <= i.minStock).length;
-  const totalValue = items.reduce((acc, curr) => acc + (curr.quantity * curr.cost), 0);
+  const lowStockItems = items.filter(i => (parseFloat(i.quantity) || 0) <= (parseFloat(i.minStock) || 0)).length;
+  const totalValue = items.reduce((acc, curr) => acc + ((parseFloat(curr.quantity) || 0) * (parseFloat(curr.cost) || 0)), 0);
   const totalValueWithIVA = totalValue * 1.16;
   
   doc.setFontSize(10);
@@ -72,17 +72,70 @@ export const generateInventoryPDF = (items) => {
   doc.text(`Valor Total (Con IVA 16%): ${formatCurrency(totalValueWithIVA)}`, 130, 45);
   
   // Table
-  const tableHeaders = [["Código", "Nombre", "Categoría", "Stock", "Mínimo", "Costo Unitario", "Costo + IVA", "Valor Stock"]];
-  const tableData = items.map(item => [
-    item.code,
-    item.name,
-    item.category || 'N/A',
-    item.quantity,
-    item.minStock,
-    formatCurrency(item.cost),
-    formatCurrency(item.cost * 1.16),
-    formatCurrency(item.quantity * item.cost)
-  ]);
+  const tableHeaders = [["Código", "Nombre", "Tipo", "Categoría", "Stock", "Mínimo", "Costo Unit", "Costo + IVA", "Valor Total"]];
+  const tableData = items.map(item => {
+    const qty = parseFloat(item.quantity) || 0;
+    const cost = parseFloat(item.cost) || 0;
+    const type = item.unitType || 'unit';
+    let stockStr = `${qty} pzas`;
+    let typeStr = 'Piezas';
+
+    if (type === 'parts') {
+      typeStr = 'Partes';
+      const ppu = parseInt(item.partsPerUnit) || 1;
+      const masterName = item.masterUnitName || 'pliego';
+      const masterEquiv = (qty / ppu).toFixed(ppu > 1 ? 1 : 0).replace(/\.0$/, '');
+      stockStr = `${qty} part (${masterEquiv} ${masterName})`;
+    } else if (type === 'liters') {
+      typeStr = 'Litros';
+      const cName = item.containerName;
+      const cCap = parseFloat(item.containerCapacity) || 0;
+      const cUnit = item.containerUnit || 'ml';
+      if (cName && cCap > 0) {
+        const capInL = cUnit === 'ml' ? cCap / 1000 : cCap;
+        const count = (qty / capInL).toFixed(1).replace(/\.0$/, '');
+        stockStr = `${qty} L (${count} ${cName}s de ${cCap}${cUnit})`;
+      } else {
+        stockStr = `${qty} L`;
+      }
+    } else if (type === 'kilos') {
+      typeStr = 'Kilos';
+      const cName = item.containerName;
+      const cCap = parseFloat(item.containerCapacity) || 0;
+      const cUnit = item.containerUnit || 'g';
+      if (cName && cCap > 0) {
+        const capInKg = cUnit === 'g' ? cCap / 1000 : cCap;
+        const count = (qty / capInKg).toFixed(1).replace(/\.0$/, '');
+        stockStr = `${qty} kg (${count} ${cName}s de ${cCap}${cUnit})`;
+      } else {
+        stockStr = `${qty} kg`;
+      }
+    } else if (type === 'centimeters') {
+      typeStr = 'Centímetros';
+      const cName = item.containerName;
+      const cCap = parseFloat(item.containerCapacity) || 0;
+      const cUnit = item.containerUnit || 'm';
+      if (cName && cCap > 0) {
+        const capInCm = cUnit === 'm' ? cCap * 100 : cCap;
+        const count = (qty / capInCm).toFixed(1).replace(/\.0$/, '');
+        stockStr = `${qty} cm (${count} ${cName}s de ${cCap}${cUnit})`;
+      } else {
+        stockStr = `${qty} cm`;
+      }
+    }
+
+    return [
+      item.code,
+      item.name,
+      typeStr,
+      item.category || 'N/A',
+      stockStr,
+      `${item.minStock || 0}`,
+      formatCurrency(cost),
+      formatCurrency(cost * 1.16),
+      formatCurrency(qty * cost)
+    ];
+  });
   
   autoTable(doc, {
     startY: 52,
@@ -92,14 +145,15 @@ export const generateInventoryPDF = (items) => {
     headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255], fontStyle: 'bold' },
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      0: { cellWidth: 20 },
-      1: { cellWidth: 40 },
-      2: { cellWidth: 25 },
-      3: { halign: 'center' },
+      0: { cellWidth: 18 },
+      1: { cellWidth: 35 },
+      2: { cellWidth: 18 },
+      3: { cellWidth: 20 },
       4: { halign: 'center' },
-      5: { halign: 'right' },
+      5: { halign: 'center' },
       6: { halign: 'right' },
-      7: { halign: 'right' }
+      7: { halign: 'right' },
+      8: { halign: 'right' }
     },
     didDrawPage: (data) => {
       // Footer page numbering
@@ -185,17 +239,19 @@ export const generateVehiclePDF = (vehicle, outgoings, totalCost, updates = []) 
   // Table of outgoings for this vehicle
   const tableHeaders = [["Fecha", "Material", "Cant", "Costo Unit (s/IVA)", "IVA (16%)", "Total unit (c/IVA)", "Costo Total (c/IVA)", "Solicitado por"]];
   const tableData = outgoings.map(out => {
-    const cost = out.costPerUnit || 0;
-    const qty = out.quantity || 0;
+    const cost = parseFloat(out.costPerUnit) || 0;
+    const qty = parseFloat(out.quantity) || 0;
+    const tot = out.totalCost !== undefined ? parseFloat(out.totalCost) : (cost * qty);
     const costIVA = cost * 1.16;
+    const qtyLabel = out.quantityFormatted || `${qty} ${out.unitSymbol || 'pzas'}`;
     return [
       formatDate(out.date).split(' ')[0],
       out.materialName,
-      qty,
+      qtyLabel,
       formatCurrency(cost),
       formatCurrency(cost * 0.16),
       formatCurrency(costIVA),
-      formatCurrency(qty * costIVA),
+      formatCurrency(tot * 1.16),
       out.technicianName
     ];
   });

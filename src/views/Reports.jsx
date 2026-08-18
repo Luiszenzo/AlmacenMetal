@@ -28,7 +28,7 @@ const Reports = () => {
   }, []);
 
   // CALCULATIONS
-  const totalCostNoIva = outgoings.reduce((acc, o) => acc + ((o.costPerUnit || 0) * (o.quantity || 0)), 0);
+  const totalCostNoIva = outgoings.reduce((acc, o) => acc + (o.totalCost !== undefined ? parseFloat(o.totalCost) : ((parseFloat(o.costPerUnit) || 0) * (parseFloat(o.quantity) || 0))), 0);
   const totalCostWithIva = totalCostNoIva * 1.16;
 
   // Cost by Vehicle Type
@@ -36,7 +36,7 @@ const Reports = () => {
   outgoings.forEach(out => {
     const veh = vehicles.find(v => v.folio === out.vehicleFolio);
     const type = veh ? veh.type : 'Otro';
-    const cost = (out.costPerUnit || 0) * (out.quantity || 0) * 1.16; // Con IVA
+    const cost = (out.totalCost !== undefined ? parseFloat(out.totalCost) : ((parseFloat(out.costPerUnit) || 0) * (parseFloat(out.quantity) || 0))) * 1.16; // Con IVA
     if (costByType[type] !== undefined) {
       costByType[type] += cost;
     }
@@ -45,7 +45,7 @@ const Reports = () => {
   // Calculate expenses for each vehicle
   const vehicleStats = vehicles.map(veh => {
     const vehOutgoings = outgoings.filter(o => o.vehicleFolio === veh.folio);
-    const costNoIva = vehOutgoings.reduce((acc, o) => acc + ((o.costPerUnit || 0) * (o.quantity || 0)), 0);
+    const costNoIva = vehOutgoings.reduce((acc, o) => acc + (o.totalCost !== undefined ? parseFloat(o.totalCost) : ((parseFloat(o.costPerUnit) || 0) * (parseFloat(o.quantity) || 0))), 0);
     const costWithIva = costNoIva * 1.16;
     return {
       ...veh,
@@ -213,17 +213,27 @@ const Reports = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {selectedVehicleOutgoings.map(o => (
-                            <tr key={o.id}>
-                              <td>{new Date(o.date).toLocaleDateString('es-MX')}</td>
-                              <td style={{ color: 'white', fontWeight: '500' }}>{o.materialName}</td>
-                              <td style={{ textAlign: 'center' }}>{o.quantity}</td>
-                              <td>{o.technicianName}</td>
-                              <td style={{ textAlign: 'right' }}>
-                                ${((o.costPerUnit || 0) * (o.quantity || 0) * 1.16).toFixed(2)}
-                              </td>
-                            </tr>
-                          ))}
+                          {selectedVehicleOutgoings.map(o => {
+                            const cost = parseFloat(o.costPerUnit) || 0;
+                            const qty = parseFloat(o.quantity) || 0;
+                            const tot = o.totalCost !== undefined ? parseFloat(o.totalCost) : (cost * qty);
+                            const qtyLabel = o.quantityFormatted || `${qty} ${o.unitSymbol || 'pzas'}`;
+                            return (
+                              <tr key={o.id}>
+                                <td>{new Date(o.date).toLocaleDateString('es-MX')}</td>
+                                <td style={{ color: 'white', fontWeight: '500' }}>{o.materialName}</td>
+                                <td style={{ textAlign: 'center' }}>
+                                  <span className="badge badge-info" style={{ fontSize: '0.75rem' }}>
+                                    {qtyLabel}
+                                  </span>
+                                </td>
+                                <td>{o.technicianName}</td>
+                                <td style={{ textAlign: 'right' }}>
+                                  ${(tot * 1.16).toFixed(2)}
+                                </td>
+                              </tr>
+                            );
+                          })}
                         </tbody>
                       </table>
                     </div>
@@ -232,7 +242,7 @@ const Reports = () => {
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '1rem', padding: '0.75rem', borderRadius: '8px', background: 'rgba(255, 255, 255, 0.02)', border: '1px solid var(--panel-border)', fontWeight: 'bold' }}>
                     <span>Total invertido (con IVA):</span>
                     <span style={{ color: '#34d399' }}>
-                      ${selectedVehicleOutgoings.reduce((acc, o) => acc + ((o.costPerUnit || 0) * (o.quantity || 0) * 1.16), 0).toFixed(2)}
+                      ${selectedVehicleOutgoings.reduce((acc, o) => acc + ((o.totalCost !== undefined ? parseFloat(o.totalCost) : ((parseFloat(o.costPerUnit) || 0) * (parseFloat(o.quantity) || 0))) * 1.16), 0).toFixed(2)}
                     </span>
                   </div>
                 </div>

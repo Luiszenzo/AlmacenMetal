@@ -542,6 +542,8 @@ export const getOutgoingsList = async () => {
 };
 
 export const registerOutgoing = async (outgoing) => {
+  const deductAmount = parseFloat(outgoing.stockDeducted !== undefined ? outgoing.stockDeducted : outgoing.quantity) || 0;
+  
   // Validate stock before recording
   if (useLocalFallback) {
     const items = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
@@ -550,17 +552,21 @@ export const registerOutgoing = async (outgoing) => {
     const matIndex = items.findIndex(i => i.id === outgoing.materialId);
     if (matIndex === -1) throw new Error("Material no encontrado.");
     
-    if (items[matIndex].quantity < outgoing.quantity) {
-      throw new Error(`Stock insuficiente. Solo quedan ${items[matIndex].quantity} unidades.`);
+    const currentStock = parseFloat(items[matIndex].quantity) || 0;
+    if (currentStock < deductAmount) {
+      throw new Error(`Stock insuficiente. Solo quedan ${currentStock} en existencia.`);
     }
     
-    // Deduct stock
-    items[matIndex].quantity -= outgoing.quantity;
+    // Deduct stock with precision handling
+    const newQty = Math.round((currentStock - deductAmount) * 1000) / 1000;
+    items[matIndex].quantity = newQty;
     localStorage.setItem("workshop_inventory", JSON.stringify(items));
     
     // Register outgoing
     const newOutgoing = {
       ...outgoing,
+      quantity: parseFloat(outgoing.quantity) || 0,
+      stockDeducted: deductAmount,
       id: "out_" + Date.now(),
       date: outgoing.date || new Date().toISOString()
     };
@@ -581,9 +587,10 @@ export const registerOutgoing = async (outgoing) => {
         throw new Error("El material seleccionado no existe en el inventario.");
       }
       
-      const newQty = sfDoc.data().quantity - outgoing.quantity;
+      const currentStock = parseFloat(sfDoc.data().quantity) || 0;
+      const newQty = Math.round((currentStock - deductAmount) * 1000) / 1000;
       if (newQty < 0) {
-        throw new Error(`Stock insuficiente. Solo quedan ${sfDoc.data().quantity} unidades.`);
+        throw new Error(`Stock insuficiente. Solo quedan ${currentStock} en existencia.`);
       }
       
       // Update inventory stock
@@ -592,12 +599,14 @@ export const registerOutgoing = async (outgoing) => {
       // Add outgoing document
       transaction.set(outgoingRef, {
         ...outgoing,
+        quantity: parseFloat(outgoing.quantity) || 0,
+        stockDeducted: deductAmount,
         id: outgoingId,
         date: outgoing.date || new Date().toISOString()
       });
     });
     
-    return { id: outgoingId, ...outgoing };
+    return { id: outgoingId, ...outgoing, stockDeducted: deductAmount };
   } catch (e) {
     console.error("Transaction failed: ", e);
     // If it's a firebase error and we didn't fall back yet
