@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Search, Calendar, User, Package, Car, ArrowUpRight, ChevronDown, Layers, Droplet, Scale, Ruler, Box } from 'lucide-react';
-import { getOutgoingsList, registerOutgoing, getInventoryList, getVehiclesList, getUsersList } from '../config/dbService';
+import { getOutgoingsList, registerOutgoing, getInventoryList, getVehiclesList, getUsersList, saveProvisionalVehicleForSiniestro } from '../config/dbService';
 import { formatStockDisplay } from './Inventory';
 
 const formatOutgoingQty = (out) => {
@@ -132,6 +132,22 @@ const Outgoings = ({ currentUser }) => {
     } else {
       setDispatchMode('base');
       setBaseQuantity(1);
+    }
+  };
+
+  const handleSelectProvisionalSiniestro = async (siniestroVal) => {
+    try {
+      const clean = (siniestroVal || '').trim().toUpperCase();
+      if (!clean) return;
+      const provVeh = await saveProvisionalVehicleForSiniestro(clean);
+      const vehList = await getVehiclesList();
+      setVehicles(vehList.filter(v => v.active));
+      setVehicleFolio(provVeh.folio);
+      setVehicleSearch('');
+      setVehicleOpen(false);
+    } catch (err) {
+      console.error(err);
+      setError('Error al registrar siniestro provisional: ' + err.message);
     }
   };
 
@@ -378,7 +394,27 @@ const Outgoings = ({ currentUser }) => {
                         </span>
                       </td>
                       <td>{out.technicianName}</td>
-                      <td style={{ fontWeight: '600', color: 'white' }}>{out.vehicleFolio}</td>
+                      <td>
+                        {out.vehicleFolio?.startsWith('SIN-') ? (
+                          <span style={{
+                            background: 'rgba(245, 158, 11, 0.15)',
+                            color: '#fbbf24',
+                            border: '1px solid rgba(245, 158, 11, 0.3)',
+                            borderRadius: '5px',
+                            padding: '0.2rem 0.5rem',
+                            fontFamily: 'monospace',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px'
+                          }}>
+                            ⏳ {out.vehicleFolio.replace('SIN-', '')} (Sin Alta)
+                          </span>
+                        ) : (
+                          <span style={{ fontWeight: '600', color: 'white' }}>{out.vehicleFolio}</span>
+                        )}
+                      </td>
                       <td style={{ textAlign: 'right' }}>${cost.toFixed(2)}</td>
                       <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#34d399' }}>
                         ${(tot * 1.16).toFixed(2)}
@@ -556,14 +592,46 @@ const Outgoings = ({ currentUser }) => {
                     background: 'var(--panel-bg, #1e2535)',
                     border: '1px solid var(--panel-border)',
                     borderRadius: '8px',
-                    maxHeight: '220px',
+                    maxHeight: '240px',
                     overflowY: 'auto',
                     boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
                   }}>
+                    {/* Option to use custom/unregistered Siniestro */}
+                    {vehicleSearch.trim() && (
+                      <div
+                        onClick={() => handleSelectProvisionalSiniestro(vehicleSearch.trim())}
+                        style={{
+                          padding: '0.65rem 0.85rem',
+                          cursor: 'pointer',
+                          background: 'rgba(245, 158, 11, 0.1)',
+                          borderBottom: '1px solid rgba(245, 158, 11, 0.25)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.5rem',
+                          color: '#fbbf24',
+                          fontSize: '0.82rem',
+                          fontWeight: 600
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(245, 158, 11, 0.2)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(245, 158, 11, 0.1)'; }}
+                      >
+                        <Plus size={14} />
+                        <span>Usar Siniestro no dado de alta: <strong style={{ color: '#fff' }}>{vehicleSearch.trim().toUpperCase()}</strong></span>
+                      </div>
+                    )}
+
                     {vehicles
-                      .filter(v =>
-                        `${v.folio} ${v.plate} ${v.type}`.toLowerCase().includes(vehicleSearch.toLowerCase())
-                      )
+                      .filter(v => {
+                        const q = vehicleSearch.toLowerCase();
+                        return (
+                          (v.folio || '').toLowerCase().includes(q) ||
+                          (v.orderNumber || '').toLowerCase().includes(q) ||
+                          (v.plate || '').toLowerCase().includes(q) ||
+                          (v.brand || '').toLowerCase().includes(q) ||
+                          (v.model || '').toLowerCase().includes(q) ||
+                          (v.type || '').toLowerCase().includes(q)
+                        );
+                      })
                       .map(v => (
                         <div
                           key={v.folio}
@@ -586,14 +654,24 @@ const Outgoings = ({ currentUser }) => {
                           onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
                           onMouseLeave={e => { e.currentTarget.style.background = vehicleFolio === v.folio ? 'rgba(99,102,241,0.18)' : 'transparent'; }}
                         >
-                          <span><strong style={{ color: '#a5b4fc' }}>{v.folio}</strong> — {v.plate}</span>
-                          <span style={{ fontSize: '0.78rem', color: '#94a3b8', marginLeft: '0.5rem' }}>{v.type}</span>
+                          <span>
+                            {v.orderNumber && <strong style={{ color: '#fbbf24', marginRight: '6px' }}>[{v.orderNumber}]</strong>}
+                            <strong style={{ color: '#a5b4fc' }}>{v.folio}</strong> — {v.plate} {v.brand || ''} {v.model || ''}
+                          </span>
+                          <span style={{ fontSize: '0.78rem', color: '#94a3b8', marginLeft: '0.5rem' }}>{v.isPendingRegistration ? '⏳ Sin Alta' : v.type}</span>
                         </div>
                       ))
                     }
-                    {vehicles.filter(v =>
-                      `${v.folio} ${v.plate} ${v.type}`.toLowerCase().includes(vehicleSearch.toLowerCase())
-                    ).length === 0 && (
+                    {vehicles.filter(v => {
+                      const q = vehicleSearch.toLowerCase();
+                      return (
+                        (v.folio || '').toLowerCase().includes(q) ||
+                        (v.orderNumber || '').toLowerCase().includes(q) ||
+                        (v.plate || '').toLowerCase().includes(q) ||
+                        (v.brand || '').toLowerCase().includes(q) ||
+                        (v.model || '').toLowerCase().includes(q)
+                      );
+                    }).length === 0 && !vehicleSearch.trim() && (
                       <div style={{ padding: '0.75rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
                         Sin resultados
                       </div>

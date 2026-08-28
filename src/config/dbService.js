@@ -494,6 +494,11 @@ export const saveVehicle = async (vehicle) => {
         url: inventoryDocUrl
       });
     }
+
+    // Auto-link any pending siniestro data if an official vehicle is being registered
+    if (!vehicle.isPendingRegistration && vehicle.orderNumber) {
+      await linkPendingSiniestroToVehicle(vehicle.orderNumber, vehicle.folio);
+    }
   } catch (e) {
     console.error("Firestore saveVehicle error:", e);
     if (e.message && (e.message.includes("exceeds the maximum allowed size") || e.message.includes("supera el límite"))) {
@@ -501,6 +506,9 @@ export const saveVehicle = async (vehicle) => {
     }
     useLocalFallback = true;
     await saveVehicle(vehicle);
+    if (!vehicle.isPendingRegistration && vehicle.orderNumber) {
+      await linkPendingSiniestroToVehicle(vehicle.orderNumber, vehicle.folio);
+    }
   }
 };
 
@@ -693,24 +701,37 @@ export const updateVehicleUpdate = async (id, fields) => {
 
 export const saveOrderedPart = async (folio, part) => {
   // Load the vehicle, update the orderedParts array, and save back
+  const cleanPart = {
+    ...part,
+    cost: part.cost !== undefined ? parseFloat(part.cost) || 0 : 0,
+    itemNo: part.itemNo ? parseInt(part.itemNo) || 1 : 1,
+    quantity: part.quantity ? parseInt(part.quantity) || 1 : 1,
+    deliveryDate: part.deliveryDate || '',
+    purchaseOrder: part.purchaseOrder || '',
+    supplier: part.supplier || '',
+    notes: part.notes || '',
+    status: part.status || 'pendiente'
+  };
+
   if (useLocalFallback) {
     const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
     const index = list.findIndex(v => v.folio === folio);
     if (index === -1) throw new Error("Vehículo no encontrado.");
     
     const parts = list[index].orderedParts || [];
-    if (part.id) {
+    if (cleanPart.id) {
       // Update existing
-      const pi = parts.findIndex(p => p.id === part.id);
-      if (pi !== -1) parts[pi] = { ...parts[pi], ...part };
-      else parts.push(part);
+      const pi = parts.findIndex(p => p.id === cleanPart.id);
+      if (pi !== -1) parts[pi] = { ...parts[pi], ...cleanPart };
+      else parts.push(cleanPart);
     } else {
       // New part
-      parts.push({ ...part, id: "op_" + Date.now() });
+      const newId = "op_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4);
+      parts.push({ ...cleanPart, id: newId, itemNo: parts.length + 1 });
     }
     list[index].orderedParts = parts;
     localStorage.setItem("workshop_vehicles", JSON.stringify(list));
-    return;
+    return cleanPart;
   }
   try {
     const vehicleRef = doc(db, "vehicles", folio);
@@ -718,20 +739,84 @@ export const saveOrderedPart = async (folio, part) => {
     if (vehicleSnap.empty) throw new Error("Vehículo no encontrado.");
     const vehicleData = vehicleSnap.docs[0].data();
     const parts = vehicleData.orderedParts || [];
-    if (part.id) {
-      const pi = parts.findIndex(p => p.id === part.id);
-      if (pi !== -1) parts[pi] = { ...parts[pi], ...part };
-      else parts.push(part);
+    if (cleanPart.id) {
+      const pi = parts.findIndex(p => p.id === cleanPart.id);
+      if (pi !== -1) parts[pi] = { ...parts[pi], ...cleanPart };
+      else parts.push(cleanPart);
     } else {
-      parts.push({ ...part, id: "op_" + Date.now() });
+      const newId = "op_" + Date.now() + "_" + Math.random().toString(36).substr(2, 4);
+      cleanPart.id = newId;
+      cleanPart.itemNo = parts.length + 1;
+      parts.push(cleanPart);
     }
     await updateDoc(vehicleRef, { orderedParts: parts });
+    return cleanPart;
   } catch (e) {
     console.error("Firestore saveOrderedPart error:", e);
     useLocalFallback = true;
-    return saveOrderedPart(folio, part);
+    return saveOrderedPart(folio, cleanPart);
   }
 };
+
+export const deleteOrderedPart = async (folio, partId) => {
+  if (useLocalFallback) {
+    const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+    const index = list.findIndex(v => v.folio === folio);
+    if (index !== -1) {
+      const parts = (list[index].orderedParts || []).filter(p => p.id !== partId);
+      list[index].orderedParts = parts;
+      localStorage.setItem("workshop_vehicles", JSON.stringify(list));
+    }
+    return;
+  }
+  try {
+    const vehicleRef = doc(db, "vehicles", folio);
+    const vehicleSnap = await getDocs(query(collection(db, "vehicles"), where("folio", "==", folio)));
+    if (!vehicleSnap.empty) {
+      const vehicleData = vehicleSnap.docs[0].data();
+      const parts = (vehicleData.orderedParts || []).filter(p => p.id !== partId);
+      await updateDoc(vehicleRef, { orderedParts: parts });
+    }
+  } catch (e) {
+    console.error("Firestore deleteOrderedPart error:", e);
+    const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+    const index = list.findIndex(v => v.folio === folio);
+    if (index !== -1) {
+      list[index].orderedParts = (list[index].orderedParts || []).filter(p => p.id !== partId);
+      localStorage.setItem("workshop_vehicles", JSON.stringify(list));
+    }
+  }
+};
+
+export const getAllPartsList = async () => {
+  const vehicles = await getVehiclesList();
+  const allParts = [];
+  
+  vehicles.forEach(v => {
+    const parts = v.orderedParts || [];
+    parts.forEach((part, idx) => {
+      allParts.push({
+        ...part,
+        id: part.id || `part_${v.folio}_${idx}`,
+        vehicleFolio: v.folio,
+        vehicleOrderNumber: v.orderNumber || v.siniestro || '',
+        vehicleBrand: v.brand || '',
+        vehicleModel: v.model || '',
+        vehicleYear: v.year || '',
+        vehicleColor: v.color || '',
+        vehiclePlate: v.plate || '',
+        vehicleSerial: v.serial || v.vin || '',
+        vehicleLocation: v.location || '',
+        vehicleType: v.type || 'Coche',
+        vehicleActive: v.active !== false,
+        itemNo: part.itemNo || (idx + 1)
+      });
+    });
+  });
+
+  return allParts;
+};
+
 
 
 export const deleteVehicleUpdate = async (updateId, folderId = null) => {
@@ -883,5 +968,379 @@ export const addVehicleComment = async (commentData) => {
     return newComment;
   }
 };
+
+// --- INVOICES SERVICES (GESTIÓN DE FACTURAS EMITIDAS) ---
+
+export const getInvoicesList = async () => {
+  if (useLocalFallback) {
+    const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+    return local.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+  }
+  try {
+    const snapshot = await getDocs(collection(db, "invoices"));
+    const list = [];
+    snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
+
+    // Fetch invoice PDF docs in parallel if stored separately
+    try {
+      const docsSnap = await getDocs(collection(db, "invoice_docs"));
+      const docsMap = {};
+      docsSnap.forEach(d => {
+        const data = d.data();
+        if (data.invoiceId && data.pdfUrl) {
+          docsMap[data.invoiceId] = { pdfUrl: data.pdfUrl, pdfName: data.pdfName };
+        }
+      });
+
+      list.forEach(inv => {
+        if (docsMap[inv.id]) {
+          inv.pdfUrl = docsMap[inv.id].pdfUrl;
+          if (docsMap[inv.id].pdfName) inv.pdfName = docsMap[inv.id].pdfName;
+        }
+      });
+    } catch (docsErr) {
+      console.warn("Error fetching invoice docs:", docsErr);
+    }
+
+    // Keep local storage mirror in sync
+    localStorage.setItem("workshop_invoices", JSON.stringify(list));
+    return list.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+  } catch (e) {
+    if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
+      console.warn("Firestore getInvoicesList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
+    } else {
+      console.warn("Firestore getInvoicesList (usando fallback local):", e?.message || e);
+    }
+    const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+    return local.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+  }
+};
+
+export const saveInvoice = async (invoiceData) => {
+  const invoiceId = invoiceData.id || `inv_${Date.now()}`;
+  const { pdfUrl, pdfName, ...metaPayload } = invoiceData;
+
+  const invoiceRecord = {
+    ...metaPayload,
+    id: invoiceId,
+    invoiceFolio: String(metaPayload.invoiceFolio || '').trim(),
+    reportNumber: String(metaPayload.reportNumber || '').trim(),
+    vehicleFolio: String(metaPayload.vehicleFolio || '').trim(),
+    subtotal: parseFloat(metaPayload.subtotal) || 0,
+    iva: parseFloat(metaPayload.iva) || 0,
+    total: parseFloat(metaPayload.total) || 0,
+    discountType: metaPayload.discountType || 'percent',
+    discountValue: parseFloat(metaPayload.discountValue) ?? 3,
+    discountAmount: parseFloat(metaPayload.discountAmount) || 0,
+    paymentSubtotal: parseFloat(metaPayload.paymentSubtotal) || 0,
+    paymentIva: parseFloat(metaPayload.paymentIva) || 0,
+    paymentTotal: parseFloat(metaPayload.paymentTotal) || 0,
+    issueDate: metaPayload.issueDate || new Date().toISOString().slice(0, 10),
+    paymentDate: metaPayload.paymentDate || null,
+    notes: metaPayload.notes || '',
+    hasPdf: !!pdfUrl,
+    pdfName: pdfName || (pdfUrl ? `Factura_${metaPayload.invoiceFolio || invoiceId}.pdf` : ''),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!invoiceRecord.createdAt) {
+    invoiceRecord.createdAt = new Date().toISOString();
+  }
+
+  // 1. Guardar en LocalStorage (incluye PDF para funcionamiento offline)
+  const localList = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+  const localIndex = localList.findIndex(i => i.id === invoiceId);
+  const fullLocalRecord = { ...invoiceRecord, pdfUrl: pdfUrl || (localIndex !== -1 ? localList[localIndex].pdfUrl : '') };
+  
+  if (localIndex !== -1) {
+    localList[localIndex] = fullLocalRecord;
+  } else {
+    localList.unshift(fullLocalRecord);
+  }
+  localStorage.setItem("workshop_invoices", JSON.stringify(localList));
+
+  if (useLocalFallback) {
+    return fullLocalRecord;
+  }
+
+  // 2. Guardar en Firestore
+  try {
+    // Guardar metadata en `invoices`
+    await setDoc(doc(db, "invoices", invoiceId), invoiceRecord, { merge: true });
+
+    // Guardar documento pesado en `invoice_docs` si hay PDF nuevo
+    if (pdfUrl) {
+      await setDoc(doc(db, "invoice_docs", `doc_${invoiceId}`), {
+        invoiceId,
+        invoiceFolio: invoiceRecord.invoiceFolio,
+        pdfUrl,
+        pdfName: invoiceRecord.pdfName,
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    return fullLocalRecord;
+  } catch (e) {
+    console.error("Firestore saveInvoice error:", e);
+    return fullLocalRecord;
+  }
+};
+
+export const deleteInvoice = async (invoiceId) => {
+  // 1. Eliminar de LocalStorage
+  const localList = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+  const filtered = localList.filter(i => i.id !== invoiceId);
+  localStorage.setItem("workshop_invoices", JSON.stringify(filtered));
+
+  if (useLocalFallback) return true;
+
+  // 2. Eliminar de Firestore
+  try {
+    await deleteDoc(doc(db, "invoices", invoiceId));
+    try {
+      await deleteDoc(doc(db, "invoice_docs", `doc_${invoiceId}`));
+    } catch (docErr) {
+      console.warn("Error deleting invoice_doc:", docErr);
+    }
+    return true;
+  } catch (e) {
+    console.error("Firestore deleteInvoice error:", e);
+    return true;
+  }
+};
+
+
+// ==========================================================================
+// PENDING / PROVISIONAL SINIESTROS SERVICES
+// ==========================================================================
+
+/**
+ * Creates or retrieves a provisional vehicle record for a Siniestro that has not yet been registered.
+ * Allows parts, outgoings, and invoices to be assigned immediately.
+ */
+export const saveProvisionalVehicleForSiniestro = async (rawSiniestro) => {
+  const cleanSiniestro = String(rawSiniestro || '').trim().toUpperCase();
+  if (!cleanSiniestro) throw new Error("Número de siniestro requerido.");
+
+  const provisionalFolio = cleanSiniestro.startsWith("SIN-") ? cleanSiniestro : `SIN-${cleanSiniestro}`;
+
+  // Check if an official or provisional vehicle already exists
+  const vehicles = await getVehiclesList();
+  const existing = vehicles.find(v => 
+    v.folio === provisionalFolio ||
+    v.folio === cleanSiniestro ||
+    (v.orderNumber && v.orderNumber.toUpperCase() === cleanSiniestro) ||
+    (v.siniestro && v.siniestro.toUpperCase() === cleanSiniestro)
+  );
+
+  if (existing) {
+    return existing;
+  }
+
+  // Create new provisional vehicle record
+  const provisionalVehicle = {
+    folio: provisionalFolio,
+    orderNumber: cleanSiniestro,
+    siniestro: cleanSiniestro,
+    plate: "PENDIENTE",
+    brand: "",
+    model: "Siniestro sin alta",
+    year: "",
+    color: "",
+    serial: "",
+    location: "POR ASIGNAR",
+    type: "Coche",
+    details: `Registro provisional para Siniestro: ${cleanSiniestro}`,
+    isPendingRegistration: true,
+    orderedParts: [],
+    active: true,
+    entryDate: new Date().toISOString()
+  };
+
+  await saveVehicle(provisionalVehicle);
+  return provisionalVehicle;
+};
+
+/**
+ * Links and migrates all parts, outgoings, and invoices from a provisional Siniestro to an official vehicle.
+ */
+export const linkPendingSiniestroToVehicle = async (rawSiniestro, officialVehicleFolio) => {
+  const cleanSiniestro = String(rawSiniestro || '').trim().toUpperCase();
+  if (!cleanSiniestro || !officialVehicleFolio) return;
+
+  const provisionalFolio = cleanSiniestro.startsWith("SIN-") ? cleanSiniestro : `SIN-${cleanSiniestro}`;
+
+  try {
+    // 1. Get provisional vehicle parts
+    const vehicles = await getVehiclesList();
+    const provisional = vehicles.find(v => 
+      v.folio === provisionalFolio || 
+      (v.isPendingRegistration && (v.orderNumber === cleanSiniestro || v.siniestro === cleanSiniestro))
+    );
+
+    let partsToMigrate = [];
+    if (provisional && provisional.orderedParts && provisional.orderedParts.length > 0) {
+      partsToMigrate = [...provisional.orderedParts];
+    }
+
+    // 2. Add migrated parts to the official vehicle
+    if (partsToMigrate.length > 0) {
+      const officialVehicle = vehicles.find(v => v.folio === officialVehicleFolio);
+      const existingOfficialParts = officialVehicle?.orderedParts || [];
+      
+      // Combine and prevent duplicate IDs
+      const combinedParts = [...existingOfficialParts];
+      partsToMigrate.forEach(p => {
+        if (!combinedParts.some(ep => ep.id === p.id)) {
+          combinedParts.push(p);
+        }
+      });
+
+      // Update in LocalStorage
+      const localVehicles = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+      const vIdx = localVehicles.findIndex(v => v.folio === officialVehicleFolio);
+      if (vIdx !== -1) {
+        localVehicles[vIdx].orderedParts = combinedParts;
+        localStorage.setItem("workshop_vehicles", JSON.stringify(localVehicles));
+      }
+
+      // Update in Firestore
+      if (!useLocalFallback) {
+        try {
+          const vRef = doc(db, "vehicles", officialVehicleFolio);
+          await updateDoc(vRef, { orderedParts: combinedParts });
+        } catch (fErr) {
+          console.warn("Firestore parts migration note:", fErr);
+        }
+      }
+    }
+
+    // 3. Migrate Outgoings from provisional folio to official folio
+    const localOutgoings = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+    let outgoingsUpdated = false;
+    localOutgoings.forEach(out => {
+      if (out.vehicleFolio === provisionalFolio || out.vehicleFolio === cleanSiniestro) {
+        out.vehicleFolio = officialVehicleFolio;
+        outgoingsUpdated = true;
+      }
+    });
+    if (outgoingsUpdated) {
+      localStorage.setItem("workshop_outgoings", JSON.stringify(localOutgoings));
+    }
+
+    if (!useLocalFallback) {
+      try {
+        const qOut = query(collection(db, "outgoings"), where("vehicleFolio", "in", [provisionalFolio, cleanSiniestro]));
+        const snapOut = await getDocs(qOut);
+        const bOut = writeBatch(db);
+        snapOut.forEach(d => {
+          bOut.update(d.ref, { vehicleFolio: officialVehicleFolio });
+        });
+        if (!snapOut.empty) await bOut.commit();
+      } catch (errOut) {
+        console.warn("Firestore outgoings migration note:", errOut);
+      }
+    }
+
+    // 4. Migrate Invoices from provisional folio to official folio
+    const localInvoices = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+    let invoicesUpdated = false;
+    localInvoices.forEach(inv => {
+      if (
+        inv.vehicleFolio === provisionalFolio || 
+        inv.vehicleFolio === cleanSiniestro ||
+        (inv.reportNumber && inv.reportNumber.toUpperCase() === cleanSiniestro && (!inv.vehicleFolio || inv.vehicleFolio.startsWith('SIN-')))
+      ) {
+        inv.vehicleFolio = officialVehicleFolio;
+        invoicesUpdated = true;
+      }
+    });
+    if (invoicesUpdated) {
+      localStorage.setItem("workshop_invoices", JSON.stringify(localInvoices));
+    }
+
+    if (!useLocalFallback) {
+      try {
+        const snapInv = await getDocs(collection(db, "invoices"));
+        const bInv = writeBatch(db);
+        let count = 0;
+        snapInv.forEach(d => {
+          const data = d.data();
+          if (
+            data.vehicleFolio === provisionalFolio ||
+            data.vehicleFolio === cleanSiniestro ||
+            (data.reportNumber && data.reportNumber.toUpperCase() === cleanSiniestro && (!data.vehicleFolio || data.vehicleFolio.startsWith('SIN-')))
+          ) {
+            bInv.update(d.ref, { vehicleFolio: officialVehicleFolio });
+            count++;
+          }
+        });
+        if (count > 0) await bInv.commit();
+      } catch (errInv) {
+        console.warn("Firestore invoices migration note:", errInv);
+      }
+    }
+
+    // 5. Delete the provisional vehicle record
+    if (provisional && provisional.isPendingRegistration) {
+      // LocalStorage
+      const localVehicles = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+      const filteredVehicles = localVehicles.filter(v => v.folio !== provisional.folio);
+      localStorage.setItem("workshop_vehicles", JSON.stringify(filteredVehicles));
+
+      // Firestore
+      if (!useLocalFallback) {
+        try {
+          await deleteDoc(doc(db, "vehicles", provisional.folio));
+        } catch (dErr) {
+          console.warn("Firestore provisional delete note:", dErr);
+        }
+      }
+    }
+
+    return true;
+  } catch (e) {
+    console.error("linkPendingSiniestroToVehicle error:", e);
+  }
+};
+
+/**
+ * Returns a list of all pending/provisional vehicles that need official registration,
+ * along with statistics of registered parts, outgoings, and invoices.
+ */
+export const getPendingSiniestrosList = async () => {
+  try {
+    const [vehicles, outgoings, invoices] = await Promise.all([
+      getVehiclesList().catch(() => []),
+      getOutgoingsList().catch(() => []),
+      getInvoicesList().catch(() => [])
+    ]);
+
+    const pendingVehicles = (vehicles || []).filter(v => v.isPendingRegistration);
+
+    return pendingVehicles.map(pv => {
+      const partsCount = (pv.orderedParts || []).length;
+      const partsCost = (pv.orderedParts || []).reduce((acc, p) => acc + (parseFloat(p.cost) || 0), 0);
+      const relatedOutgoings = (outgoings || []).filter(o => o.vehicleFolio === pv.folio || o.vehicleFolio === pv.orderNumber);
+      const relatedInvoices = (invoices || []).filter(i => i.vehicleFolio === pv.folio || i.reportNumber === pv.orderNumber);
+
+      return {
+        ...pv,
+        siniestro: pv.orderNumber || pv.folio.replace("SIN-", ""),
+        partsCount,
+        partsCost,
+        outgoingsCount: relatedOutgoings.length,
+        outgoingsCost: relatedOutgoings.reduce((acc, o) => acc + (parseFloat(o.totalCost) || 0), 0),
+        invoicesCount: relatedInvoices.length,
+        invoicesTotal: relatedInvoices.reduce((acc, i) => acc + (parseFloat(i.total) || 0), 0)
+      };
+    });
+  } catch (err) {
+    console.warn("getPendingSiniestrosList error:", err);
+    return [];
+  }
+};
+
+
 
 

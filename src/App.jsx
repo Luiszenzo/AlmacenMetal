@@ -7,8 +7,10 @@ import { Wrench, LogOut } from 'lucide-react';
 // Views
 import Login from './views/Login';
 import Vehicles from './views/Vehicles';
+import Parts from './views/Parts';
 import Inventory from './views/Inventory';
 import Outgoings from './views/Outgoings';
+import Invoices from './views/Invoices';
 import Reports from './views/Reports';
 import Users from './views/Users';
 import ClientTracking from './views/ClientTracking';
@@ -132,10 +134,18 @@ function App() {
     switch (currentView) {
       case 'vehicles':
         return <Vehicles currentUser={user} />;
+      case 'parts':
+        return <Parts currentUser={user} onNavigateToVehicle={() => setCurrentView('vehicles')} />;
       case 'inventory':
         return <Inventory currentUser={user} />;
       case 'outgoings':
         return <Outgoings currentUser={user} />;
+      case 'invoices':
+        if (user.role === 'tecnico') {
+          setCurrentView('vehicles');
+          return <Vehicles currentUser={user} />;
+        }
+        return <Invoices currentUser={user} />;
       case 'reports':
         // Safe check for role restriction
         if (user.role === 'tecnico') {

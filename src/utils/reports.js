@@ -512,3 +512,326 @@ export const generateGeneralPDF = (vehicles, outgoings) => {
   
   doc.save(`Reporte_General_Vehiculos_${new Date().toISOString().slice(0,10)}.pdf`);
 };
+
+// --- INVOICES PDF GENERATOR (FACTURAS EMITIDAS) ---
+export const generateInvoicesPDF = (invoices, filterTitle = '') => {
+  // Format in Landscape (Horizontal) for wide table layout
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  
+  // Header
+  doc.setFont("Helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42); // Navy Dark
+  doc.text("METAL SHAPERS - FACTURAS EMITIDAS", 14, 15);
+  
+  doc.setFontSize(10);
+  doc.setFont("Helvetica", "normal");
+  doc.setTextColor(100, 116, 139);
+  const subtitle = filterTitle ? `Filtro: ${filterTitle} | Generado: ${new Date().toLocaleDateString('es-MX')}` : `Reporte Fiscal y Control de Pagos - ${new Date().toLocaleDateString('es-MX')}`;
+  doc.text(subtitle, 14, 21);
+  
+  doc.setDrawColor(203, 213, 225);
+  doc.line(14, 24, 283, 24);
+  
+  // Financial Summary Cards
+  const totalSubtotal = invoices.reduce((acc, i) => acc + (parseFloat(i.subtotal) || 0), 0);
+  const totalIVA = invoices.reduce((acc, i) => acc + (parseFloat(i.iva) || 0), 0);
+  const totalInvoiced = invoices.reduce((acc, i) => acc + (parseFloat(i.total) || 0), 0);
+  const totalDiscount = invoices.reduce((acc, i) => acc + (parseFloat(i.discountAmount) || 0), 0);
+  const totalPaymentSubtotal = invoices.reduce((acc, i) => acc + (parseFloat(i.paymentSubtotal) || 0), 0);
+  const totalPaymentIVA = invoices.reduce((acc, i) => acc + (parseFloat(i.paymentIva) || 0), 0);
+  const totalPaymentFinal = invoices.reduce((acc, i) => acc + (parseFloat(i.paymentTotal) || 0), 0);
+  
+  const paidInvoices = invoices.filter(i => !!i.paymentDate);
+  const totalCollected = paidInvoices.reduce((acc, i) => acc + (parseFloat(i.paymentTotal) || 0), 0);
+  const totalPending = invoices.filter(i => !i.paymentDate).reduce((acc, i) => acc + (parseFloat(i.paymentTotal) || 0), 0);
+  
+  doc.setFontSize(9);
+  doc.setFont("Helvetica", "bold");
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Total Facturas: ${invoices.length} (${paidInvoices.length} Pagadas / ${invoices.length - paidInvoices.length} Pendientes)`, 14, 30);
+  doc.text(`Total Facturado (Bruto): ${formatCurrency(totalInvoiced)}`, 100, 30);
+  doc.setTextColor(16, 185, 129); // Emerald
+  doc.text(`Total Cobrado: ${formatCurrency(totalCollected)}`, 185, 30);
+  doc.setTextColor(245, 158, 11); // Amber
+  doc.text(`Por Cobrar: ${formatCurrency(totalPending)}`, 240, 30);
+
+  const tableHeaders = [
+    [
+      "NO",
+      "FOLIO",
+      "REPORTE",
+      "MONTO SIN IVA",
+      "IVA",
+      "MONTO TOTAL",
+      "DESC. PAGO",
+      "PAGO SIN IVA",
+      "IVA",
+      "TOTAL PAGO",
+      "F. ENVÍO",
+      "F. PAGO",
+      "OBSERVACIONES"
+    ]
+  ];
+
+  const tableData = invoices.map((inv, idx) => [
+    idx + 1,
+    inv.invoiceFolio || '—',
+    inv.reportNumber || '—',
+    formatCurrency(inv.subtotal || 0),
+    formatCurrency(inv.iva || 0),
+    formatCurrency(inv.total || 0),
+    formatCurrency(inv.discountAmount || 0),
+    formatCurrency(inv.paymentSubtotal || 0),
+    formatCurrency(inv.paymentIva || 0),
+    formatCurrency(inv.paymentTotal || 0),
+    inv.issueDate ? new Date(inv.issueDate + 'T00:00:00').toLocaleDateString('es-MX') : '—',
+    inv.paymentDate ? new Date(inv.paymentDate + 'T00:00:00').toLocaleDateString('es-MX') : 'PENDIENTE',
+    inv.notes || ''
+  ]);
+
+  // Summary row at the bottom
+  const tableFooter = [
+    [
+      "TOTALES",
+      "—",
+      "—",
+      formatCurrency(totalSubtotal),
+      formatCurrency(totalIVA),
+      formatCurrency(totalInvoiced),
+      formatCurrency(totalDiscount),
+      formatCurrency(totalPaymentSubtotal),
+      formatCurrency(totalPaymentIVA),
+      formatCurrency(totalPaymentFinal),
+      "—",
+      "—",
+      `Cobrado: ${formatCurrency(totalCollected)}`
+    ]
+  ];
+
+  autoTable(doc, {
+    startY: 35,
+    head: tableHeaders,
+    body: tableData,
+    foot: tableFooter,
+    theme: 'grid',
+    styles: {
+      fontSize: 7.5,
+      cellPadding: 2,
+      lineColor: [203, 213, 225],
+      lineWidth: 0.1
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'center'
+    },
+    footStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+      halign: 'right'
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      1: { halign: 'center', cellWidth: 16, fontStyle: 'bold' },
+      2: { halign: 'center', cellWidth: 24 },
+      3: { halign: 'right', cellWidth: 22 },
+      4: { halign: 'right', cellWidth: 18 },
+      5: { halign: 'right', cellWidth: 22, fontStyle: 'bold' },
+      6: { halign: 'right', cellWidth: 20 },
+      7: { halign: 'right', cellWidth: 22 },
+      8: { halign: 'right', cellWidth: 18 },
+      9: { halign: 'right', cellWidth: 24, fontStyle: 'bold' },
+      10: { halign: 'center', cellWidth: 20 },
+      11: { halign: 'center', cellWidth: 22 },
+      12: { halign: 'left' }
+    },
+    didParseCell: (data) => {
+      // Highlight pending vs paid in PDF
+      if (data.section === 'body' && data.column.index === 11) {
+        if (data.cell.raw === 'PENDIENTE') {
+          data.cell.styles.textColor = [217, 119, 6]; // Dark Amber
+          data.cell.styles.fontStyle = 'bold';
+        } else {
+          data.cell.styles.textColor = [16, 185, 129]; // Emerald
+        }
+      }
+    },
+    didDrawPage: () => {
+      const str = "Página " + doc.internal.getNumberOfPages();
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(str, 283 - doc.getTextWidth(str), 202);
+    }
+  });
+
+  doc.save(`Facturas_Emitidas_${new Date().toISOString().slice(0,10)}.pdf`);
+};
+
+// --- PARTS / REFACCIONES PDF GENERATOR ---
+export const generatePartsPDF = (parts, filterTitle = '') => {
+  // Format in Landscape (Horizontal) for wide table layout
+  const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  
+  // Header
+  doc.setFont("Helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(15, 23, 42); // Navy Dark
+  doc.text("METAL SHAPERS - CONTROL DE REFACCIONES Y PIEZAS", 14, 15);
+  
+  doc.setFontSize(10);
+  doc.setFont("Helvetica", "normal");
+  doc.setTextColor(100, 116, 139);
+  const subtitle = filterTitle 
+    ? `Filtro: ${filterTitle} | Generado: ${new Date().toLocaleDateString('es-MX')}` 
+    : `Control General de Piezas por Vehículo - ${new Date().toLocaleDateString('es-MX')}`;
+  doc.text(subtitle, 14, 21);
+  
+  doc.setDrawColor(203, 213, 225);
+  doc.line(14, 24, 283, 24);
+  
+  // Statistics summary
+  const totalParts = parts.length;
+  const pendingParts = parts.filter(p => (p.status || '').toLowerCase() === 'pendiente' || (p.purchaseOrder || '').toLowerCase() === 'pendiente').length;
+  const deliveredParts = parts.filter(p => (p.status || '').toLowerCase() === 'recibido' || (p.status || '').toLowerCase() === 'entregado' || (p.purchaseOrder || '').toLowerCase() === 'entregado' || (p.purchaseOrder || '').toLowerCase() === 'listo').length;
+  const inAgencyParts = parts.filter(p => (p.status || '').toLowerCase() === 'pedido' || (p.purchaseOrder || '').toLowerCase() === 'en agencia').length;
+  const totalCost = parts.reduce((acc, p) => acc + (parseFloat(p.cost) || 0), 0);
+  
+  doc.setFontSize(9);
+  doc.setFont("Helvetica", "bold");
+  doc.setTextColor(30, 41, 59);
+  doc.text(`Total Piezas: ${totalParts}`, 14, 30);
+  doc.setTextColor(217, 119, 6); // Amber
+  doc.text(`Pendientes: ${pendingParts}`, 50, 30);
+  doc.setTextColor(59, 130, 246); // Blue
+  doc.text(`En Agencia/Pedido: ${inAgencyParts}`, 90, 30);
+  doc.setTextColor(16, 185, 129); // Emerald
+  doc.text(`Entregadas/Listas: ${deliveredParts}`, 145, 30);
+  doc.setTextColor(15, 23, 42);
+  doc.text(`Costo Total Acumulado: ${formatCurrency(totalCost)}`, 210, 30);
+
+  const tableHeaders = [
+    [
+      "SINIESTRO",
+      "MARCA",
+      "MODELO",
+      "AÑO",
+      "COLOR",
+      "PLACA",
+      "SERIE",
+      "UBICACIÓN",
+      "NO",
+      "REFACCIÓN",
+      "PEDIDO",
+      "ORDEN DE COMPRA",
+      "F. ENTREGA",
+      "COSTO"
+    ]
+  ];
+
+  const tableData = parts.map((p, idx) => [
+    p.vehicleOrderNumber || p.vehicleFolio || '—',
+    p.vehicleBrand || '—',
+    p.vehicleModel || '—',
+    p.vehicleYear || '—',
+    p.vehicleColor || '—',
+    p.vehiclePlate || '—',
+    p.vehicleSerial || '—',
+    p.vehicleLocation || '—',
+    p.itemNo || (idx + 1),
+    p.name || '—',
+    (p.supplier || '—').toUpperCase(),
+    (p.purchaseOrder || p.status || '—').toUpperCase(),
+    p.deliveryDate ? new Date(p.deliveryDate + (p.deliveryDate.includes('T') ? '' : 'T00:00:00')).toLocaleDateString('es-MX') : '—',
+    formatCurrency(p.cost || 0)
+  ]);
+
+  // Summary row at the bottom
+  const tableFooter = [
+    [
+      "TOTALES",
+      "—",
+      "—",
+      "—",
+      "—",
+      "—",
+      "—",
+      "—",
+      `${totalParts} pzas`,
+      "—",
+      "—",
+      "—",
+      "—",
+      formatCurrency(totalCost)
+    ]
+  ];
+
+  autoTable(doc, {
+    startY: 35,
+    head: tableHeaders,
+    body: tableData,
+    foot: tableFooter,
+    theme: 'grid',
+    styles: {
+      fontSize: 7.5,
+      cellPadding: 2,
+      lineColor: [203, 213, 225],
+      lineWidth: 0.1
+    },
+    headStyles: {
+      fillColor: [15, 23, 42],
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      halign: 'center'
+    },
+    footStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [15, 23, 42],
+      fontStyle: 'bold',
+      halign: 'right'
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 20, fontStyle: 'bold' },
+      1: { halign: 'center', cellWidth: 16 },
+      2: { halign: 'left', cellWidth: 22 },
+      3: { halign: 'center', cellWidth: 12 },
+      4: { halign: 'center', cellWidth: 18 },
+      5: { halign: 'center', cellWidth: 18, fontStyle: 'bold' },
+      6: { halign: 'center', cellWidth: 22 },
+      7: { halign: 'center', cellWidth: 18 },
+      8: { halign: 'center', cellWidth: 8, fontStyle: 'bold' },
+      9: { halign: 'left', cellWidth: 35, fontStyle: 'bold' },
+      10: { halign: 'center', cellWidth: 22 },
+      11: { halign: 'center', cellWidth: 24 },
+      12: { halign: 'center', cellWidth: 20 },
+      13: { halign: 'right', cellWidth: 24, fontStyle: 'bold' }
+    },
+    didParseCell: (data) => {
+      // Highlight delivery / order status in PDF
+      if (data.section === 'body' && data.column.index === 11) {
+        const txt = String(data.cell.raw || '').toUpperCase();
+        if (txt.includes('ENTREGADO') || txt.includes('LISTO')) {
+          data.cell.styles.textColor = [16, 185, 129]; // Emerald
+          data.cell.styles.fontStyle = 'bold';
+        } else if (txt.includes('AGENCIA') || txt.includes('PEDIDO')) {
+          data.cell.styles.textColor = [37, 99, 235]; // Blue
+        } else if (txt.includes('PENDIENTE')) {
+          data.cell.styles.textColor = [217, 119, 6]; // Amber
+          data.cell.styles.fontStyle = 'bold';
+        }
+      }
+    },
+    didDrawPage: () => {
+      const str = "Página " + doc.internal.getNumberOfPages();
+      doc.setFontSize(8);
+      doc.setTextColor(148, 163, 184);
+      doc.text(str, 283 - doc.getTextWidth(str), 202);
+    }
+  });
+
+  doc.save(`Reporte_Refacciones_${new Date().toISOString().slice(0, 10)}.pdf`);
+};
+
+

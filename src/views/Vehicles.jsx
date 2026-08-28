@@ -5,22 +5,25 @@ import {
   AlertCircle, ClipboardList, Wrench, Package, BookOpen,
   PlusCircle, Camera, X, Eye, EyeOff, Hammer, Cog, Clock,
   CheckSquare, ShoppingCart, Info, Edit3, Save, Trash2,
-  MessageSquare, Send
+  MessageSquare, Send, Layers, DollarSign, Download, FileSpreadsheet
 } from 'lucide-react';
 import {
   getVehiclesList,
   saveVehicle,
   toggleVehicleStatus,
   getOutgoingsList,
+  getInvoicesList,
   getVehicleUpdates,
   saveVehicleUpdate,
   deleteVehicleUpdate,
   updateVehicleUpdate,
   saveOrderedPart,
+  deleteOrderedPart,
   getVehicleComments,
-  addVehicleComment
+  addVehicleComment,
+  getPendingSiniestrosList
 } from '../config/dbService';
-import { generateVehiclePDF, generateGeneralPDF } from '../utils/reports';
+import { generateVehiclePDF, generateGeneralPDF, generatePartsPDF } from '../utils/reports';
 import JSZip from 'jszip';
 
 // ---- Helpers ----
@@ -150,11 +153,14 @@ const ProcessStatusSelector = ({ value, onChange, disabled }) => (
 const Vehicles = ({ currentUser }) => {
   const [vehicles, setVehicles] = useState([]);
   const [outgoings, setOutgoings] = useState([]);
+  const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [processFilter, setProcessFilter] = useState('');
+  const [invoiceFilter, setInvoiceFilter] = useState('');
+  const [pendingSiniestros, setPendingSiniestros] = useState([]);
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
@@ -169,8 +175,13 @@ const Vehicles = ({ currentUser }) => {
   const [isEditMode, setIsEditMode] = useState(false);
   const [formFolio, setFormFolio] = useState('');
   const [formOrderNumber, setFormOrderNumber] = useState('');
+  const [formBrand, setFormBrand] = useState('');
   const [formModel, setFormModel] = useState('');
+  const [formYear, setFormYear] = useState('');
+  const [formColor, setFormColor] = useState('');
   const [formPlate, setFormPlate] = useState('');
+  const [formSerial, setFormSerial] = useState('');
+  const [formLocation, setFormLocation] = useState('PISO');
   const [formType, setFormType] = useState('Coche');
   const [formDetails, setFormDetails] = useState('');
   const [formEntryDate, setFormEntryDate] = useState('');
@@ -179,7 +190,6 @@ const Vehicles = ({ currentUser }) => {
   const [formInventoryDoc, setFormInventoryDoc] = useState('');
   const [formBodyworkStatus, setFormBodyworkStatus] = useState('pendiente');
   const [formMechanicsStatus, setFormMechanicsStatus] = useState('pendiente');
-  const [formColor, setFormColor] = useState('');
   const [formInsurance, setFormInsurance] = useState('');
   const [formError, setFormError] = useState('');
 
@@ -198,11 +208,15 @@ const Vehicles = ({ currentUser }) => {
   const [savingFolder, setSavingFolder] = useState(false);
   const [savingEntry, setSavingEntry] = useState(false);
 
-  // Ordered parts
+  // Ordered parts state in vehicle inspector
   const [showAddPartForm, setShowAddPartForm] = useState(false);
+  const [editingPartId, setEditingPartId] = useState(null);
+  const [partItemNo, setPartItemNo] = useState(1);
   const [partName, setPartName] = useState('');
-  const [partSupplier, setPartSupplier] = useState('');
-  const [partQty, setPartQty] = useState(1);
+  const [partSupplier, setPartSupplier] = useState('AGENCIA');
+  const [partPurchaseOrder, setPartPurchaseOrder] = useState('PENDIENTE');
+  const [partDeliveryDate, setPartDeliveryDate] = useState('');
+  const [partCost, setPartCost] = useState('');
   const [partNotes, setPartNotes] = useState('');
   const [savingPart, setSavingPart] = useState(false);
 
@@ -229,9 +243,16 @@ const Vehicles = ({ currentUser }) => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [vList, oList] = await Promise.all([getVehiclesList(), getOutgoingsList()]);
+      const [vList, oList, invList, pList] = await Promise.all([
+        getVehiclesList(),
+        getOutgoingsList(),
+        getInvoicesList(),
+        getPendingSiniestrosList()
+      ]);
       setVehicles(vList);
       setOutgoings(oList);
+      setInvoices(invList);
+      setPendingSiniestros(pList);
     } catch (err) {
       console.error(err);
     } finally {
@@ -254,14 +275,17 @@ const Vehicles = ({ currentUser }) => {
   };
 
   // ---- Open Modals ----
-  const handleOpenAdd = () => {
+  const handleOpenAdd = (defaultOrderNumber = '') => {
     setIsEditMode(false);
-    setFormFolio(''); setFormOrderNumber(''); setFormModel('');
-    setFormPlate(''); setFormType('Coche'); setFormDetails('');
+    setFormFolio('');
+    setFormOrderNumber(typeof defaultOrderNumber === 'string' ? defaultOrderNumber : '');
+    setFormBrand(''); setFormModel('');
+    setFormYear(''); setFormColor(''); setFormPlate(''); setFormSerial(''); setFormLocation('PISO');
+    setFormType('Coche'); setFormDetails('');
     setFormEntryDate(new Date().toISOString().slice(0, 16));
     setFormImageUrls([]); setFormAdmissionPass(''); setFormInventoryDoc('');
     setFormBodyworkStatus('pendiente'); setFormMechanicsStatus('pendiente');
-    setFormColor(''); setFormInsurance('');
+    setFormInsurance('');
     setFormError('');
     setShowAddModal(true);
   };
@@ -270,17 +294,21 @@ const Vehicles = ({ currentUser }) => {
     e.stopPropagation();
     setIsEditMode(true);
     setFormFolio(v.folio);
-    setFormOrderNumber(v.orderNumber || '');
+    setFormOrderNumber(v.orderNumber || v.siniestro || '');
+    setFormBrand(v.brand || '');
     setFormModel(v.model || '');
-    setFormPlate(v.plate);
-    setFormType(v.type);
+    setFormYear(v.year || '');
+    setFormColor(v.color || '');
+    setFormPlate(v.plate || '');
+    setFormSerial(v.serial || v.vin || '');
+    setFormLocation(v.location || 'PISO');
+    setFormType(v.type || 'Coche');
     setFormDetails(v.details || '');
     setFormImageUrls(v.imageUrls || []);
     setFormAdmissionPass(v.admissionPassUrl || '');
     setFormInventoryDoc(v.inventoryDocUrl || '');
     setFormBodyworkStatus(v.bodyworkStatus || 'pendiente');
     setFormMechanicsStatus(v.mechanicsStatus || 'pendiente');
-    setFormColor(v.color || '');
     setFormInsurance(v.insurance || '');
     const dateObj = new Date(v.entryDate);
     const tzOffset = dateObj.getTimezoneOffset() * 60000;
@@ -298,6 +326,8 @@ const Vehicles = ({ currentUser }) => {
     setExpandedFolderId(null); setShowNewEntryFolderId(null);
     setNewEntryNote(''); setNewEntryPhotos([]);
     setShowAddPartForm(false);
+    setEditingPartId(null);
+    setPartName(''); setPartSupplier('AGENCIA'); setPartPurchaseOrder('PENDIENTE'); setPartDeliveryDate(''); setPartCost(''); setPartNotes('');
     setShowDetailModal(true);
     loadVehicleUpdates(v.folio);
     // Sync slider with saved progress or derive from status
@@ -403,8 +433,13 @@ const Vehicles = ({ currentUser }) => {
       await saveVehicle({
         folio: formFolio.trim().toUpperCase(),
         orderNumber: formOrderNumber.trim().toUpperCase(),
+        brand: formBrand.trim().toUpperCase(),
         model: formModel.trim(),
+        year: formYear.trim(),
+        color: formColor.trim().toUpperCase(),
         plate: formPlate.trim().toUpperCase(),
+        serial: formSerial.trim().toUpperCase(),
+        location: formLocation.trim().toUpperCase(),
         type: formType,
         details: formDetails.trim(),
         imageUrls: optimizedImages,
@@ -412,7 +447,6 @@ const Vehicles = ({ currentUser }) => {
         inventoryDocUrl: optimizedInventory,
         bodyworkStatus: formBodyworkStatus,
         mechanicsStatus: formMechanicsStatus,
-        color: formColor.trim(),
         insurance: formInsurance.trim(),
         entryDate: new Date(formEntryDate).toISOString(),
         active: isEditMode ? (vehicles.find(v => v.folio === formFolio.trim().toUpperCase())?.active ?? true) : true,
@@ -528,23 +562,53 @@ const Vehicles = ({ currentUser }) => {
   };
 
   // ---- Save Ordered Part ----
+  const handleOpenAddPart = () => {
+    setEditingPartId(null);
+    const existingParts = selectedVehicle.orderedParts || [];
+    setPartItemNo(existingParts.length + 1);
+    setPartName('');
+    setPartSupplier('AGENCIA');
+    setPartPurchaseOrder('PENDIENTE');
+    setPartDeliveryDate('');
+    setPartCost('');
+    setPartNotes('');
+    setShowAddPartForm(true);
+  };
+
+  const handleOpenEditPart = (p) => {
+    setEditingPartId(p.id);
+    setPartItemNo(p.itemNo || 1);
+    setPartName(p.name || '');
+    setPartSupplier(p.supplier || 'AGENCIA');
+    setPartPurchaseOrder(p.purchaseOrder || p.status || 'PENDIENTE');
+    setPartDeliveryDate(p.deliveryDate || '');
+    setPartCost(p.cost !== undefined ? p.cost : '');
+    setPartNotes(p.notes || '');
+    setShowAddPartForm(true);
+  };
+
   const handleSaveOrderedPart = async () => {
     if (!partName.trim()) { alert('Escribe el nombre de la pieza.'); return; }
     setSavingPart(true);
     try {
       await saveOrderedPart(selectedVehicle.folio, {
-        name: partName.trim(),
-        supplier: partSupplier.trim(),
-        quantity: partQty,
-        notes: partNotes.trim(),
-        status: 'pendiente'
+        id: editingPartId || undefined,
+        itemNo: parseInt(partItemNo) || 1,
+        name: partName.trim().toUpperCase(),
+        supplier: partSupplier.trim().toUpperCase(),
+        purchaseOrder: partPurchaseOrder.trim().toUpperCase(),
+        status: partPurchaseOrder.trim().toLowerCase(),
+        deliveryDate: partDeliveryDate || '',
+        cost: parseFloat(partCost) || 0,
+        notes: partNotes.trim()
       });
       // Reload vehicle data to get updated orderedParts
       const vList = await getVehiclesList();
       setVehicles(vList);
       const refreshed = vList.find(v => v.folio === selectedVehicle.folio);
       if (refreshed) setSelectedVehicle(refreshed);
-      setPartName(''); setPartSupplier(''); setPartQty(1); setPartNotes('');
+      setEditingPartId(null);
+      setPartName(''); setPartSupplier('AGENCIA'); setPartPurchaseOrder('PENDIENTE'); setPartDeliveryDate(''); setPartCost(''); setPartNotes('');
       setShowAddPartForm(false);
     } catch (err) {
       alert('Error al guardar pieza: ' + err.message);
@@ -553,10 +617,29 @@ const Vehicles = ({ currentUser }) => {
     }
   };
 
+  const handleDeleteVehiclePart = async (partId, partNameStr) => {
+    if (!isEditable) return;
+    const confirmDelete = window.confirm(`¿Eliminar la refacción "${partNameStr}" de este vehículo?`);
+    if (!confirmDelete) return;
+    try {
+      await deleteOrderedPart(selectedVehicle.folio, partId);
+      const vList = await getVehiclesList();
+      setVehicles(vList);
+      const refreshed = vList.find(v => v.folio === selectedVehicle.folio);
+      if (refreshed) setSelectedVehicle(refreshed);
+    } catch (err) {
+      alert('Error al eliminar pieza: ' + err.message);
+    }
+  };
+
   const handleUpdatePartStatus = async (part, newStatus) => {
     if (!isEditable) return;
     try {
-      await saveOrderedPart(selectedVehicle.folio, { ...part, status: newStatus });
+      await saveOrderedPart(selectedVehicle.folio, {
+        ...part,
+        purchaseOrder: newStatus.toUpperCase(),
+        status: newStatus.toLowerCase()
+      });
       const vList = await getVehiclesList();
       setVehicles(vList);
       const refreshed = vList.find(v => v.folio === selectedVehicle.folio);
@@ -564,8 +647,28 @@ const Vehicles = ({ currentUser }) => {
     } catch (err) { console.error(err); }
   };
 
+  const handleDownloadVehiclePartsPDF = () => {
+    if (!selectedVehicle) return;
+    const vehicleParts = (selectedVehicle.orderedParts || []).map((p, idx) => ({
+      ...p,
+      vehicleFolio: selectedVehicle.folio,
+      vehicleOrderNumber: selectedVehicle.orderNumber || selectedVehicle.folio,
+      vehicleBrand: selectedVehicle.brand || '',
+      vehicleModel: selectedVehicle.model || '',
+      vehicleYear: selectedVehicle.year || '',
+      vehicleColor: selectedVehicle.color || '',
+      vehiclePlate: selectedVehicle.plate || '',
+      vehicleSerial: selectedVehicle.serial || '',
+      vehicleLocation: selectedVehicle.location || 'PISO',
+      itemNo: p.itemNo || (idx + 1)
+    }));
+    generatePartsPDF(vehicleParts, `Vehículo ${selectedVehicle.plate || selectedVehicle.folio} (${selectedVehicle.brand || ''} ${selectedVehicle.model || ''})`);
+  };
+
   // ---- Computed ----
-  const filteredVehicles = vehicles.filter(v => {
+  const officialVehicles = vehicles.filter(v => !v.isPendingRegistration);
+
+  const filteredVehicles = officialVehicles.filter(v => {
     const q = search.toLowerCase();
     const matchesSearch =
       (v.folio || '').toLowerCase().includes(q) ||
@@ -582,7 +685,13 @@ const Vehicles = ({ currentUser }) => {
     if (processFilter === 'pendiente') matchesProcess = currentStat === 'pendiente';
     if (processFilter === 'en_proceso') matchesProcess = currentStat === 'en_proceso';
     if (processFilter === 'terminado') matchesProcess = currentStat === 'terminado' || !v.active;
-    return matchesSearch && matchesType && matchesStatus && matchesProcess;
+
+    let matchesInvoice = true;
+    const vInv = invoices.find(inv => inv.vehicleFolio === v.folio || (v.orderNumber && inv.reportNumber === v.orderNumber));
+    if (invoiceFilter === 'invoiced') matchesInvoice = !!vInv;
+    if (invoiceFilter === 'not_invoiced') matchesInvoice = !vInv;
+
+    return matchesSearch && matchesType && matchesStatus && matchesProcess && matchesInvoice;
   });
 
   const getVehicleIcon = (type) => {
@@ -747,6 +856,87 @@ const Vehicles = ({ currentUser }) => {
           )}
         </div>
       </div>
+
+      {/* Facturación vinculada */}
+      {(() => {
+        const linkedInvoice = invoices.find(inv => inv.vehicleFolio === selectedVehicle.folio || (selectedVehicle.orderNumber && inv.reportNumber === selectedVehicle.orderNumber));
+        return (
+          <div style={{
+            background: linkedInvoice ? 'rgba(16, 185, 129, 0.06)' : 'rgba(15, 23, 42, 0.4)',
+            border: `1px solid ${linkedInvoice ? 'rgba(16, 185, 129, 0.25)' : 'var(--panel-border)'}`,
+            borderRadius: '10px',
+            padding: '0.85rem 1rem',
+            marginBottom: '1rem'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: linkedInvoice ? '0.6rem' : '0' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <FileText size={16} color={linkedInvoice ? '#34d399' : '#94a3b8'} />
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Estado Fiscal / Factura
+                </span>
+              </div>
+              {linkedInvoice ? (
+                <span style={{
+                  background: linkedInvoice.paymentDate ? 'rgba(16, 185, 129, 0.2)' : 'rgba(245, 158, 11, 0.15)',
+                  color: linkedInvoice.paymentDate ? '#34d399' : '#fbbf24',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  fontSize: '0.75rem',
+                  fontWeight: 600
+                }}>
+                  Factura Folio {linkedInvoice.invoiceFolio} ({linkedInvoice.paymentDate ? 'Pagada' : 'Pendiente'})
+                </span>
+              ) : (
+                <span style={{
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  color: '#fbbf24',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  fontSize: '0.72rem',
+                  fontWeight: 500
+                }}>
+                  ⏳ Sin Factura Registrada
+                </span>
+              )}
+            </div>
+
+            {linkedInvoice && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem', fontSize: '0.82rem', marginTop: '4px' }}>
+                <div>
+                  <span style={{ color: 'var(--text-secondary)' }}>Monto Total:</span>{' '}
+                  <strong style={{ color: '#f8fafc' }}>${(linkedInvoice.total || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-secondary)' }}>Total a Pagar:</span>{' '}
+                  <strong style={{ color: linkedInvoice.paymentDate ? '#34d399' : '#fbbf24' }}>
+                    ${(linkedInvoice.paymentTotal || 0).toLocaleString('es-MX', { minimumFractionDigits: 2 })}
+                  </strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-secondary)' }}>F. Envío:</span>{' '}
+                  <span>{linkedInvoice.issueDate || '—'}</span>
+                </div>
+                {linkedInvoice.pdfUrl && (
+                  <div style={{ display: 'flex', alignItems: 'center' }}>
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '0.25rem 0.55rem', fontSize: '0.72rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                      onClick={e => {
+                        e.stopPropagation();
+                        openPdfBase64(linkedInvoice.pdfUrl);
+                      }}
+                    >
+                      <FileText size={12} color="#f87171" />
+                      <span>Ver Factura PDF</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <div className="section-divider" />
 
@@ -958,6 +1148,10 @@ const Vehicles = ({ currentUser }) => {
 
   const renderPartsTab = () => {
     const orderedParts = selectedVehicle.orderedParts || [];
+    const totalPartsCost = orderedParts.reduce((acc, p) => acc + (parseFloat(p.cost) || 0), 0);
+    const pendingPartsCount = orderedParts.filter(p => (p.purchaseOrder || p.status || '').toLowerCase().includes('pendiente')).length;
+    const deliveredPartsCount = orderedParts.filter(p => (p.purchaseOrder || p.status || '').toLowerCase().includes('entregado') || (p.purchaseOrder || p.status || '').toLowerCase().includes('listo') || (p.purchaseOrder || p.status || '').toLowerCase().includes('recibido')).length;
+
     return (
       <div>
         {/* Piezas del Almacén */}
@@ -966,11 +1160,11 @@ const Vehicles = ({ currentUser }) => {
           Piezas del Almacén (Salidas Registradas)
         </h4>
         {getVehicleOutgoings(selectedVehicle.folio).length === 0 ? (
-          <div style={{ background: 'rgba(15,23,42,0.3)', borderRadius: '10px', padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem', border: '1px solid var(--panel-border)' }}>
+          <div style={{ background: 'rgba(15,23,42,0.3)', borderRadius: '10px', padding: '1.25rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem', border: '1px solid var(--panel-border)' }}>
             Sin piezas del almacén usadas. Regístralas en el módulo de <strong>Salidas</strong>.
           </div>
         ) : (
-          <div className="table-container" style={{ maxHeight: '180px', overflowY: 'auto', marginBottom: '1.5rem' }}>
+          <div className="table-container" style={{ maxHeight: '160px', overflowY: 'auto', marginBottom: '1.5rem' }}>
             <table className="custom-table" style={{ fontSize: '0.8rem' }}>
               <thead>
                 <tr><th>Material</th><th>Cant</th><th>Técnico</th><th style={{ textAlign: 'right' }}>Costo (IVA)</th></tr>
@@ -989,14 +1183,14 @@ const Vehicles = ({ currentUser }) => {
           </div>
         )}
 
-        <div className="section-divider" />
+        <div className="section-divider" style={{ margin: '1.25rem 0' }} />
 
-        {/* Piezas Encargadas / Pedidas Header with Client Visibility Switch */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+        {/* Piezas Encargadas / Pedidas Header & Actions */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-            <h4 style={{ fontSize: '0.9rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
-              <ShoppingCart size={16} style={{ color: '#fbbf24' }} />
-              Piezas Encargadas / Pedidas
+            <h4 style={{ fontSize: '0.95rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.4rem', margin: 0 }}>
+              <Layers size={16} style={{ color: '#818cf8' }} />
+              Control de Refacciones Requeridas
             </h4>
             <button
               type="button"
@@ -1015,42 +1209,160 @@ const Vehicles = ({ currentUser }) => {
               title="Controlar si el cliente puede ver la lista de refacciones en su portal"
             >
               {selectedVehicle.showPartsToClient !== false ? <Eye size={12} /> : <EyeOff size={12} />}
-              <span>{selectedVehicle.showPartsToClient !== false ? 'Piezas Visibles al Cliente' : 'Piezas Ocultas al Cliente'}</span>
+              <span>{selectedVehicle.showPartsToClient !== false ? 'Visible a Cliente' : 'Oculto a Cliente'}</span>
             </button>
           </div>
-          {isEditable && (
-            <button className="btn btn-secondary btn-sm" onClick={() => setShowAddPartForm(p => !p)}>
-              <PlusCircle size={14} />
-              <span>{showAddPartForm ? 'Cancelar' : 'Agregar Pieza'}</span>
-            </button>
-          )}
+
+          <div style={{ display: 'flex', gap: '0.4rem' }}>
+            {orderedParts.length > 0 && (
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={handleDownloadVehiclePartsPDF}
+                style={{ borderColor: 'rgba(239, 68, 68, 0.4)', color: '#f87171' }}
+                title="Descargar reporte en PDF de las refacciones de este vehículo"
+              >
+                <FileText size={13} />
+                <span>PDF Refacciones</span>
+              </button>
+            )}
+
+            {isEditable && (
+              <button className="btn btn-primary btn-sm" onClick={showAddPartForm ? () => setShowAddPartForm(false) : handleOpenAddPart}>
+                <PlusCircle size={14} />
+                <span>{showAddPartForm ? 'Cancelar' : '+ Agregar Refacción'}</span>
+              </button>
+            )}
+          </div>
         </div>
 
-        {/* Add part form */}
+        {/* Quick summary badges for this vehicle */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))',
+          gap: '0.5rem',
+          marginBottom: '1rem'
+        }}>
+          <div style={{ background: 'rgba(99, 102, 241, 0.1)', border: '1px solid rgba(99, 102, 241, 0.25)', borderRadius: '8px', padding: '0.5rem 0.75rem' }}>
+            <span style={{ fontSize: '0.72rem', color: '#a5b4fc', display: 'block' }}>Total Piezas</span>
+            <strong style={{ fontSize: '1.1rem', color: '#e0e7ff' }}>{orderedParts.length}</strong>
+          </div>
+          <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.25)', borderRadius: '8px', padding: '0.5rem 0.75rem' }}>
+            <span style={{ fontSize: '0.72rem', color: '#fbbf24', display: 'block' }}>Pendientes</span>
+            <strong style={{ fontSize: '1.1rem', color: '#fde68a' }}>{pendingPartsCount}</strong>
+          </div>
+          <div style={{ background: 'rgba(16, 185, 129, 0.1)', border: '1px solid rgba(16, 185, 129, 0.25)', borderRadius: '8px', padding: '0.5rem 0.75rem' }}>
+            <span style={{ fontSize: '0.72rem', color: '#34d399', display: 'block' }}>Entregadas / Listas</span>
+            <strong style={{ fontSize: '1.1rem', color: '#a7f3d0' }}>{deliveredPartsCount}</strong>
+          </div>
+          <div style={{ background: 'rgba(236, 72, 153, 0.1)', border: '1px solid rgba(236, 72, 153, 0.25)', borderRadius: '8px', padding: '0.5rem 0.75rem' }}>
+            <span style={{ fontSize: '0.72rem', color: '#f472b6', display: 'block' }}>Costo Total Refacciones</span>
+            <strong style={{ fontSize: '1.05rem', color: '#fbcfe8' }}>${totalPartsCost.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+          </div>
+        </div>
+
+        {/* Add/Edit part form */}
         {showAddPartForm && (
-          <div className="add-update-form" style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+          <div className="add-update-form" style={{ marginBottom: '1rem', border: '1px solid var(--primary)' }}>
+            <div className="add-update-form-title">
+              <Layers size={15} style={{ color: 'var(--primary)' }} />
+              {editingPartId ? 'Editar Refacción del Vehículo' : 'Nueva Refacción para este Vehículo'}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '70px 1fr', gap: '0.6rem', marginBottom: '0.6rem' }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Nombre de la Pieza *</label>
-                <input className="input-field" style={{ padding: '0.5rem 0.75rem' }} value={partName} onChange={e => setPartName(e.target.value)} placeholder="ej. Amortiguador delantero" />
+                <label>No. (#)</label>
+                <input
+                  className="input-field"
+                  style={{ padding: '0.45rem 0.6rem' }}
+                  type="number"
+                  min={1}
+                  value={partItemNo}
+                  onChange={e => setPartItemNo(e.target.value)}
+                />
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Proveedor</label>
-                <input className="input-field" style={{ padding: '0.5rem 0.75rem' }} value={partSupplier} onChange={e => setPartSupplier(e.target.value)} placeholder="ej. Refaccionaria Pérez" />
-              </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Cantidad</label>
-                <input className="input-field" style={{ padding: '0.5rem 0.75rem' }} type="number" min={1} value={partQty} onChange={e => setPartQty(parseInt(e.target.value) || 1)} />
-              </div>
-              <div className="form-group" style={{ marginBottom: 0 }}>
-                <label>Notas</label>
-                <input className="input-field" style={{ padding: '0.5rem 0.75rem' }} value={partNotes} onChange={e => setPartNotes(e.target.value)} placeholder="ej. Pedido el lunes" />
+                <label>Nombre de la Refacción / Trabajo *</label>
+                <input
+                  className="input-field"
+                  style={{ padding: '0.45rem 0.6rem' }}
+                  value={partName}
+                  onChange={e => setPartName(e.target.value)}
+                  placeholder="ej. TOLVA INF. DE MOTOR, CHECAR CON TAPICERO..."
+                />
               </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.75rem' }}>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.6rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Pedido / Proveedor</label>
+                <input
+                  className="input-field"
+                  style={{ padding: '0.45rem 0.6rem' }}
+                  value={partSupplier}
+                  onChange={e => setPartSupplier(e.target.value)}
+                  placeholder="ej. AGENCIA, TAPICERO, MOSTRADOR..."
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Orden de Compra / Estatus</label>
+                <input
+                  className="input-field"
+                  style={{ padding: '0.45rem 0.6rem' }}
+                  value={partPurchaseOrder}
+                  onChange={e => setPartPurchaseOrder(e.target.value)}
+                  placeholder="ej. ENTREGADO, EN AGENCIA, PENDIENTE..."
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.6rem', marginBottom: '0.6rem' }}>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Fecha Estimada de Entrega</label>
+                <input
+                  className="input-field"
+                  style={{ padding: '0.45rem 0.6rem' }}
+                  type="date"
+                  value={partDeliveryDate}
+                  onChange={e => setPartDeliveryDate(e.target.value)}
+                />
+              </div>
+              <div className="form-group" style={{ marginBottom: 0 }}>
+                <label>Costo ($ MXN)</label>
+                <input
+                  className="input-field"
+                  style={{ padding: '0.45rem 0.6rem' }}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={partCost}
+                  onChange={e => setPartCost(e.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Notas u Observaciones</label>
+              <input
+                className="input-field"
+                style={{ padding: '0.45rem 0.6rem' }}
+                value={partNotes}
+                onChange={e => setPartNotes(e.target.value)}
+                placeholder="Detalles sobre el pedido, proveedor o tiempo de entrega..."
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '0.75rem' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => { setShowAddPartForm(false); setEditingPartId(null); }}
+              >
+                Cancelar
+              </button>
               <button className="btn btn-primary btn-sm" onClick={handleSaveOrderedPart} disabled={savingPart}>
                 <Save size={14} />
-                <span>{savingPart ? 'Guardando...' : 'Guardar Pieza'}</span>
+                <span>{savingPart ? 'Guardando...' : editingPartId ? 'Actualizar Refacción' : 'Guardar Refacción'}</span>
               </button>
             </div>
           </div>
@@ -1058,44 +1370,124 @@ const Vehicles = ({ currentUser }) => {
 
         {orderedParts.length === 0 ? (
           <div style={{ background: 'rgba(15,23,42,0.3)', borderRadius: '10px', padding: '1.5rem', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem', border: '1px solid var(--panel-border)' }}>
-            No hay piezas encargadas registradas.
+            No hay refacciones registradas para este vehículo.
           </div>
         ) : (
-          <div className="table-container">
-            <table className="custom-table" style={{ fontSize: '0.8rem' }}>
+          <div className="table-container" style={{ overflowX: 'auto' }}>
+            <table className="custom-table" style={{ fontSize: '0.8rem', minWidth: '700px' }}>
               <thead>
-                <tr><th>Pieza</th><th>Proveedor</th><th style={{ textAlign: 'center' }}>Cant</th><th style={{ textAlign: 'center' }}>Estatus</th><th>Notas</th></tr>
+                <tr>
+                  <th style={{ width: '40px', textAlign: 'center' }}>NO</th>
+                  <th>REFACCIÓN</th>
+                  <th style={{ width: '110px', textAlign: 'center' }}>PEDIDO</th>
+                  <th style={{ width: '130px', textAlign: 'center' }}>ORDEN COMPRA / ESTATUS</th>
+                  <th style={{ width: '100px', textAlign: 'center' }}>F. ENTREGA</th>
+                  <th style={{ width: '90px', textAlign: 'right' }}>COSTO</th>
+                  {isEditable && <th style={{ width: '75px', textAlign: 'center' }}>ACCIONES</th>}
+                </tr>
               </thead>
               <tbody>
-                {orderedParts.map(p => (
-                  <tr key={p.id}>
-                    <td style={{ fontWeight: 500, color: 'white' }}>{p.name}</td>
-                    <td>{p.supplier || '—'}</td>
-                    <td style={{ textAlign: 'center' }}>{p.quantity}</td>
-                    <td style={{ textAlign: 'center' }}>
-                      {isEditable ? (
-                        <select
-                          className="parts-status-select"
-                          value={p.status}
-                          onChange={e => handleUpdatePartStatus(p, e.target.value)}
-                          style={{
-                            color: p.status === 'recibido' ? '#34d399' : p.status === 'pedido' ? '#fbbf24' : '#94a3b8'
-                          }}
-                        >
-                          <option value="pendiente">Pendiente</option>
-                          <option value="pedido">Pedido</option>
-                          <option value="recibido">Recibido</option>
-                        </select>
-                      ) : (
-                        <span className={`process-mini-badge ${p.status === 'recibido' ? 'terminado' : p.status === 'pedido' ? 'en_proceso' : 'pendiente'}`}>
-                          {PART_STATUS_LABELS[p.status] || p.status}
+                {orderedParts.map((p, idx) => {
+                  const statusStr = (p.purchaseOrder || p.status || '').toUpperCase();
+                  const isDelivered = statusStr.includes('ENTREGADO') || statusStr.includes('LISTO') || statusStr.includes('RECIBIDO');
+                  const isInAgency = statusStr.includes('AGENCIA') || statusStr.includes('PEDIDO') || statusStr.includes('CAMINO');
+
+                  let formattedDate = '—';
+                  if (p.deliveryDate) {
+                    try {
+                      formattedDate = new Date(p.deliveryDate + (p.deliveryDate.includes('T') ? '' : 'T00:00:00')).toLocaleDateString('es-MX', {
+                        day: '2-digit',
+                        month: 'short'
+                      });
+                    } catch {
+                      formattedDate = p.deliveryDate;
+                    }
+                  }
+
+                  return (
+                    <tr key={p.id || idx}>
+                      <td style={{ textAlign: 'center', fontWeight: 700, color: 'var(--primary)' }}>
+                        {p.itemNo || (idx + 1)}
+                      </td>
+                      <td>
+                        <div style={{ fontWeight: 500, color: 'white' }}>{p.name}</div>
+                        {p.notes && <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>{p.notes}</div>}
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        <span className="pedido-badge general" style={{ padding: '0.15rem 0.45rem', fontSize: '0.72rem' }}>
+                          {p.supplier || '—'}
                         </span>
+                      </td>
+                      <td style={{ textAlign: 'center' }}>
+                        {isEditable ? (
+                          <select
+                            className="parts-inline-select"
+                            value={p.purchaseOrder || p.status || 'PENDIENTE'}
+                            onChange={e => handleUpdatePartStatus(p, e.target.value)}
+                            style={{
+                              padding: '0.2rem 0.4rem',
+                              fontSize: '0.72rem',
+                              color: isDelivered ? '#34d399' : isInAgency ? '#60a5fa' : '#fbbf24'
+                            }}
+                          >
+                            <option value="PENDIENTE">PENDIENTE</option>
+                            <option value="EN AGENCIA">EN AGENCIA</option>
+                            <option value="PEDIDO">PEDIDO</option>
+                            <option value="EN CAMINO">EN CAMINO</option>
+                            <option value="ENTREGADO">ENTREGADO</option>
+                            <option value="LISTO">LISTO</option>
+                          </select>
+                        ) : (
+                          <span className={`process-mini-badge ${isDelivered ? 'terminado' : isInAgency ? 'en_proceso' : 'pendiente'}`}>
+                            {p.purchaseOrder || p.status || 'PENDIENTE'}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ textAlign: 'center', fontSize: '0.75rem', color: '#cbd5e1' }}>
+                        {formattedDate}
+                      </td>
+                      <td style={{ textAlign: 'right', fontWeight: 600, color: p.cost > 0 ? '#34d399' : '#94a3b8' }}>
+                        {p.cost > 0 ? `$${parseFloat(p.cost).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$ 0.00'}
+                      </td>
+                      {isEditable && (
+                        <td style={{ textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '0.25rem', justifyContent: 'center' }}>
+                            <button
+                              type="button"
+                              className="action-btn action-edit"
+                              style={{ padding: '2px 4px' }}
+                              onClick={() => handleOpenEditPart(p)}
+                              title="Editar esta refacción"
+                            >
+                              <Edit3 size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              className="action-btn action-delete"
+                              style={{ padding: '2px 4px' }}
+                              onClick={() => handleDeleteVehiclePart(p.id, p.name)}
+                              title="Eliminar esta refacción"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
+                        </td>
                       )}
-                    </td>
-                    <td style={{ fontSize: '0.75rem' }}>{p.notes || '—'}</td>
-                  </tr>
-                ))}
+                    </tr>
+                  );
+                })}
               </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={5} style={{ textAlign: 'right', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Total Inversión en Refacciones:
+                  </td>
+                  <td style={{ textAlign: 'right', fontWeight: 700, color: '#34d399', fontSize: '0.9rem' }}>
+                    ${totalPartsCost.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </td>
+                  {isEditable && <td></td>}
+                </tr>
+              </tfoot>
             </table>
           </div>
         )}
@@ -1618,10 +2010,10 @@ const Vehicles = ({ currentUser }) => {
       {/* Stats Bar */}
       <div className="stats-grid" style={{ marginBottom: '1.5rem' }}>
         {[
-          { label: 'Total Vehículos', value: vehicles.length, color: 'primary' },
-          { label: 'En Taller', value: vehicles.filter(v => v.active).length, color: 'warning' },
-          { label: 'Servicios en Proceso', value: vehicles.filter(v => (v.mechanicsStatus === 'en_proceso' || v.bodyworkStatus === 'en_proceso') && v.active).length, color: 'secondary' },
-          { label: 'Servicios Terminados', value: vehicles.filter(v => v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado' || !v.active).length, color: 'success' },
+          { label: 'Total Vehículos', value: officialVehicles.length, color: 'primary' },
+          { label: 'En Taller', value: officialVehicles.filter(v => v.active).length, color: 'warning' },
+          { label: 'Servicios en Proceso', value: officialVehicles.filter(v => (v.mechanicsStatus === 'en_proceso' || v.bodyworkStatus === 'en_proceso') && v.active).length, color: 'secondary' },
+          { label: 'Servicios Terminados', value: officialVehicles.filter(v => v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado' || !v.active).length, color: 'success' },
         ].map(s => (
           <div key={s.label} className="glass-panel stat-card">
             <div className={`stat-icon ${s.color}`}>
@@ -1634,6 +2026,97 @@ const Vehicles = ({ currentUser }) => {
           </div>
         ))}
       </div>
+
+      {/* ── Pending Siniestros Banner (Vehículos con piezas/salidas/facturas pero sin alta oficial) ── */}
+      {pendingSiniestros.length > 0 && (
+        <div className="glass-panel" style={{
+          padding: '1.25rem',
+          marginBottom: '1.5rem',
+          background: 'rgba(245, 158, 11, 0.05)',
+          border: '1px solid rgba(245, 158, 11, 0.3)',
+          borderRadius: '14px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.85rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <div style={{ background: 'rgba(245, 158, 11, 0.2)', color: '#fbbf24', padding: '7px', borderRadius: '10px', display: 'flex' }}>
+                <Clock size={22} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '1.05rem', color: '#fbbf24', fontWeight: 700 }}>
+                  Siniestros Pendientes de Dar de Alta ({pendingSiniestros.length})
+                </h3>
+                <p style={{ margin: '2px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  Se han registrado refacciones, consumos o facturas para estos siniestros. Al dar de alta el vehículo con su No. de Siniestro, todo quedará vinculado automáticamente.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '0.75rem' }}>
+            {pendingSiniestros.map(ps => (
+              <div key={ps.folio} style={{
+                background: 'rgba(15, 23, 42, 0.75)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: '10px',
+                padding: '0.85rem 1rem',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                gap: '0.65rem'
+              }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{
+                      background: 'rgba(245, 158, 11, 0.16)',
+                      color: '#fbbf24',
+                      border: '1px solid rgba(245, 158, 11, 0.35)',
+                      borderRadius: '5px',
+                      padding: '0.2rem 0.55rem',
+                      fontFamily: 'monospace',
+                      fontWeight: 700,
+                      fontSize: '0.88rem'
+                    }}>
+                      📋 Siniestro: {ps.siniestro}
+                    </span>
+                    <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                      {new Date(ps.entryDate).toLocaleDateString('es-MX')}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap', marginTop: '6px', fontSize: '0.73rem' }}>
+                    {ps.partsCount > 0 && (
+                      <span style={{ background: 'rgba(99, 102, 241, 0.15)', color: '#a5b4fc', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                        🧩 {ps.partsCount} {ps.partsCount === 1 ? 'Pieza' : 'Piezas'} (${ps.partsCost.toFixed(2)})
+                      </span>
+                    )}
+                    {ps.outgoingsCount > 0 && (
+                      <span style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                        📦 {ps.outgoingsCount} {ps.outgoingsCount === 1 ? 'Salida' : 'Salidas'}
+                      </span>
+                    )}
+                    {ps.invoicesCount > 0 && (
+                      <span style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', padding: '2px 6px', borderRadius: '4px', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                        🧾 {ps.invoicesCount} {ps.invoicesCount === 1 ? 'Factura' : 'Facturas'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {isEditable && (
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    onClick={() => handleOpenAdd(ps.siniestro)}
+                    style={{ width: '100%', justifyContent: 'center', fontSize: '0.8rem', padding: '0.45rem' }}
+                  >
+                    <Plus size={14} /> Dar de Alta Vehículo
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="search-filter-bar">
@@ -1663,6 +2146,11 @@ const Vehicles = ({ currentUser }) => {
           <option value="pendiente">Pendiente</option>
           <option value="en_proceso">En Proceso</option>
           <option value="terminado">Terminados</option>
+        </select>
+        <select className="select-field" value={invoiceFilter} onChange={e => setInvoiceFilter(e.target.value)} style={{ maxWidth: '165px' }}>
+          <option value="">Todas las Facturas</option>
+          <option value="invoiced">🧾 Con Factura</option>
+          <option value="not_invoiced">⏳ Sin Facturar</option>
         </select>
       </div>
 
@@ -1705,7 +2193,43 @@ const Vehicles = ({ currentUser }) => {
                     <div>
                       <h3 className="vehicle-card-title">{v.folio}</h3>
                       {v.model && <div className="vehicle-model-name">{v.model}</div>}
-                      <span className="vehicle-card-plate">{v.plate}</span>
+                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap', marginTop: '2px' }}>
+                        <span className="vehicle-card-plate">{v.plate}</span>
+                        {(() => {
+                          const vInv = invoices.find(inv => inv.vehicleFolio === v.folio || (v.orderNumber && inv.reportNumber === v.orderNumber));
+                          if (vInv) {
+                            return (
+                              <span style={{
+                                background: 'rgba(16, 185, 129, 0.15)',
+                                color: '#34d399',
+                                border: '1px solid rgba(16, 185, 129, 0.3)',
+                                borderRadius: '5px',
+                                padding: '1px 5px',
+                                fontSize: '0.68rem',
+                                fontWeight: 600,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '2px'
+                              }} title={`Facturado con Folio ${vInv.invoiceFolio}`}>
+                                🧾 Folio {vInv.invoiceFolio || 'Sí'} {vInv.paymentDate ? '✓' : ''}
+                              </span>
+                            );
+                          }
+                          return (
+                            <span style={{
+                              background: 'rgba(245, 158, 11, 0.08)',
+                              color: '#fbbf24',
+                              border: '1px solid rgba(245, 158, 11, 0.18)',
+                              borderRadius: '5px',
+                              padding: '1px 5px',
+                              fontSize: '0.68rem',
+                              fontWeight: 500
+                            }} title="Vehículo sin factura emitida">
+                              ⏳ Sin Factura
+                            </span>
+                          );
+                        })()}
+                      </div>
                     </div>
                   </div>
 
@@ -1785,7 +2309,7 @@ const Vehicles = ({ currentUser }) => {
             )}
 
             <form onSubmit={handleSubmit}>
-              {/* Row 1: Folio + Order Number */}
+              {/* Row 1: Folio + Siniestro / Order Number */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div className="form-group">
                   <label>Folio (ID Interno) *</label>
@@ -1796,39 +2320,87 @@ const Vehicles = ({ currentUser }) => {
                   />
                 </div>
                 <div className="form-group">
-                  <label>Número de Orden</label>
+                  <label>No. de Siniestro / Orden</label>
                   <input
                     type="text" className="input-field" value={formOrderNumber}
                     onChange={e => setFormOrderNumber(e.target.value)}
-                    placeholder="ej. ORD-2026-010"
+                    placeholder="ej. B52454862, ORD-2026-010"
                   />
                 </div>
               </div>
 
-              {/* Row 2: Model + Plate */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+              {/* Row 2: Brand + Model + Year */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 80px', gap: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Marca</label>
+                  <input
+                    type="text" className="input-field" value={formBrand}
+                    onChange={e => setFormBrand(e.target.value)}
+                    placeholder="ej. HONDA, MAZDA, NISSAN..."
+                  />
+                </div>
                 <div className="form-group">
                   <label>Modelo del Vehículo</label>
                   <input
                     type="text" className="input-field" value={formModel}
                     onChange={e => setFormModel(e.target.value)}
-                    placeholder="ej. Chevrolet Aveo 2018"
+                    placeholder="ej. CITY, MX 5, VERSA..."
                   />
                 </div>
+                <div className="form-group">
+                  <label>Año</label>
+                  <input
+                    type="text" className="input-field" value={formYear}
+                    onChange={e => setFormYear(e.target.value)}
+                    placeholder="2022"
+                  />
+                </div>
+              </div>
+
+              {/* Row 3: Placas + Serie (VIN) */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr', gap: '1rem' }}>
                 <div className="form-group">
                   <label>Placas *</label>
                   <input
                     type="text" className="input-field" value={formPlate}
                     onChange={e => setFormPlate(e.target.value)}
-                    placeholder="ej. XYZ-456-B" required
+                    placeholder="ej. ULP448F, UNJ342K" required
+                  />
+                </div>
+                <div className="form-group">
+                  <label>No. de Serie / VIN</label>
+                  <input
+                    type="text" className="input-field" value={formSerial}
+                    onChange={e => setFormSerial(e.target.value)}
+                    placeholder="ej. JM1NDAC70L0415588"
                   />
                 </div>
               </div>
 
-              {/* Row 3: Type + Date */}
+              {/* Row 4: Ubicación + Color */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                 <div className="form-group">
-                  <label>Tipo de Vehículo</label>
+                  <label>Ubicación en Taller</label>
+                  <input
+                    type="text" className="input-field" value={formLocation}
+                    onChange={e => setFormLocation(e.target.value)}
+                    placeholder="ej. PISO, PATIO, HOJALATERÍA, PINTURA..."
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Color del Vehículo</label>
+                  <input
+                    type="text" className="input-field" value={formColor}
+                    onChange={e => setFormColor(e.target.value)}
+                    placeholder="ej. GRIS/NEGRO, BLANCO..."
+                  />
+                </div>
+              </div>
+
+              {/* Row 5: Type + Date + Insurance */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: '0.75rem' }}>
+                <div className="form-group">
+                  <label>Tipo</label>
                   <select className="select-field" value={formType} onChange={e => setFormType(e.target.value)}>
                     <option value="Coche">Coche</option>
                     <option value="Tracto">Tracto / Camión</option>
@@ -1840,18 +2412,6 @@ const Vehicles = ({ currentUser }) => {
                   <input
                     type="datetime-local" className="input-field" value={formEntryDate}
                     onChange={e => setFormEntryDate(e.target.value)} required
-                  />
-                </div>
-              </div>
-
-              {/* Row 4: Color + Insurance */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                <div className="form-group">
-                  <label>Color del Vehículo</label>
-                  <input
-                    type="text" className="input-field" value={formColor}
-                    onChange={e => setFormColor(e.target.value)}
-                    placeholder="ej. Rojo, Blanco perla, Gris"
                   />
                 </div>
                 <div className="form-group">

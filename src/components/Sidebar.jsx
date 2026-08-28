@@ -1,6 +1,7 @@
 import React from 'react';
 import { 
   Car, 
+  Layers,
   Package, 
   ArrowUpRight, 
   BarChart3, 
@@ -8,15 +9,18 @@ import {
   LogOut, 
   Wrench,
   Database,
-  Search
+  Search,
+  FileText
 } from 'lucide-react';
 import { resetFirebaseConnection } from '../config/dbService';
 
 const Sidebar = ({ currentView, setView, user, onLogout, isFirebaseConnected }) => {
   const menuItems = [
     { id: 'vehicles', label: 'Vehículos', icon: Car, roles: ['admin', 'encargado', 'tecnico'] },
+    { id: 'parts', label: 'Piezas / Refacc.', icon: Layers, roles: ['admin', 'encargado', 'tecnico'] },
     { id: 'inventory', label: 'Inventario', icon: Package, roles: ['admin', 'encargado', 'tecnico'] },
     { id: 'outgoings', label: 'Salidas', icon: ArrowUpRight, roles: ['admin', 'encargado', 'tecnico'] },
+    { id: 'invoices', label: 'Facturas', icon: FileText, roles: ['admin', 'encargado'] },
     { id: 'reports', label: 'Reportes', icon: BarChart3, roles: ['admin', 'encargado'] },
     { id: 'users', label: 'Usuarios', icon: Users, roles: ['admin', 'encargado'] },
     { id: 'client-tracking', label: 'Vista Cliente', icon: Search, roles: ['admin', 'encargado', 'tecnico'] },
