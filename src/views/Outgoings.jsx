@@ -1,12 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Search, Calendar, User, Package, Car, ArrowUpRight, ChevronDown, Layers, Droplet, Scale, Ruler, Box } from 'lucide-react';
-import { getOutgoingsList, registerOutgoing, getInventoryList, getVehiclesList, getUsersList, saveProvisionalVehicleForSiniestro } from '../config/dbService';
+import { Plus, Search, Calendar, User, Package, Car, ArrowUpRight, ChevronDown, Layers, Droplet, Scale, Ruler, Box, Edit2, Trash2 } from 'lucide-react';
+import { getOutgoingsList, registerOutgoing, updateOutgoing, deleteOutgoing, getInventoryList, getVehiclesList, getUsersList, saveProvisionalVehicleForSiniestro, subscribeToCollection } from '../config/dbService';
 import { formatStockDisplay } from './Inventory';
 
 const formatOutgoingQty = (out) => {
   if (out.quantityFormatted) return out.quantityFormatted;
   const sym = out.unitSymbol || (out.unitType === 'liters' ? 'L' : out.unitType === 'kilos' ? 'kg' : out.unitType === 'centimeters' ? 'cm' : out.unitType === 'parts' ? 'partes' : 'pzas');
   return `${out.quantity} ${sym}`;
+};
+
+const formatDateForInput = (dateStr) => {
+  if (!dateStr) return new Date().toISOString().slice(0, 16);
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return new Date().toISOString().slice(0, 16);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
 };
 
 const Outgoings = ({ currentUser }) => {
@@ -16,6 +28,7 @@ const Outgoings = ({ currentUser }) => {
   const [technicians, setTechnicians] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [editingOutgoingId, setEditingOutgoingId] = useState(null);
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -56,6 +69,7 @@ const Outgoings = ({ currentUser }) => {
   }, []);
 
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
+  const isAdmin = currentUser?.role === 'admin';
 
   const loadAllData = async () => {
     setLoading(true);
@@ -84,9 +98,28 @@ const Outgoings = ({ currentUser }) => {
 
   useEffect(() => {
     loadAllData();
+    const intervalId = setInterval(() => {
+      loadAllData();
+    }, 6000);
+
+    const handleDataChanged = () => loadAllData();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    const unsubOutgoings = subscribeToCollection('outgoings', () => loadAllData());
+    const unsubInventory = subscribeToCollection('inventory', () => loadAllData());
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+      if (typeof unsubOutgoings === 'function') unsubOutgoings();
+      if (typeof unsubInventory === 'function') unsubInventory();
+    };
   }, []);
 
   const handleOpenAdd = () => {
+    setEditingOutgoingId(null);
     setMaterialId('');
     setMaterialSearch('');
     setVehicleFolio('');
@@ -101,6 +134,46 @@ const Outgoings = ({ currentUser }) => {
     setError('');
     setSuccess('');
     setShowAddModal(true);
+  };
+
+  const handleOpenEdit = (out) => {
+    if (!isAdmin) return;
+    setEditingOutgoingId(out.id);
+    setMaterialId(out.materialId || '');
+    setMaterialSearch('');
+    setVehicleFolio(out.vehicleFolio || '');
+    setVehicleSearch('');
+    setTechnicianId(out.technicianId || '');
+    setDispatchMode(out.dispatchMode || 'base');
+    setContainerCount(out.containerCount !== undefined ? out.containerCount : 1);
+    setSubQuantity(out.subQuantity !== undefined ? out.subQuantity : '');
+    setBaseQuantity(out.baseQuantity !== undefined ? out.baseQuantity : (out.quantity || 1));
+    setCustomContainerCap(out.customContainerCap !== undefined ? out.customContainerCap : '');
+    setCustomContainerUnit(out.customContainerUnit || 'ml');
+    setDate(formatDateForInput(out.date));
+    setError('');
+    setSuccess('');
+    setShowAddModal(true);
+  };
+
+  const handleDelete = async (out) => {
+    if (!isAdmin) {
+      alert("Únicamente el administrador puede eliminar registros de salidas.");
+      return;
+    }
+    if (!window.confirm(`¿Estás seguro de que deseas eliminar la salida del material "${out.materialName}"? Se repondrán ${out.stockDeducted || out.quantity} ${out.unitSymbol || ''} al inventario.`)) {
+      return;
+    }
+
+    try {
+      await deleteOutgoing(out.id, currentUser?.role);
+      setSuccess('Salida eliminada exitosamente y stock repuesto en el inventario.');
+      loadAllData();
+      setTimeout(() => setSuccess(''), 3000);
+    } catch (err) {
+      console.error('Error al eliminar salida:', err);
+      alert(err.message || 'Error al eliminar el registro de salida.');
+    }
   };
 
   const selectedMaterialObj = inventory.find(i => i.id === materialId);
@@ -238,8 +311,18 @@ const Outgoings = ({ currentUser }) => {
     }
 
     const currentStock = parseFloat(material.quantity) || 0;
-    if (currentStock < deduction) {
-      setError(`Stock insuficiente. Solo quedan ${formatStockDisplay(material)} de ${material.name}.`);
+    let availableStock = currentStock;
+
+    if (editingOutgoingId) {
+      const originalOut = outgoings.find(o => o.id === editingOutgoingId);
+      if (originalOut && originalOut.materialId === materialId) {
+        const oldDeduction = parseFloat(originalOut.stockDeducted !== undefined ? originalOut.stockDeducted : originalOut.quantity) || 0;
+        availableStock += oldDeduction;
+      }
+    }
+
+    if (availableStock < deduction) {
+      setError(`Stock insuficiente. Solo quedan ${availableStock} de ${material.name}.`);
       return;
     }
 
@@ -289,28 +372,44 @@ const Outgoings = ({ currentUser }) => {
       formattedQty = `${baseQuantity} pza${parseFloat(baseQuantity) === 1 ? '' : 's'}`;
     }
 
-    try {
-      await registerOutgoing({
-        materialId,
-        materialName: material.name,
-        unitType: uType,
-        unitSymbol: uType === 'liters' ? 'L' : uType === 'kilos' ? 'kg' : uType === 'centimeters' ? 'cm' : uType === 'parts' ? 'partes' : 'pza',
-        quantity: deduction,
-        quantityFormatted: formattedQty,
-        stockDeducted: deduction,
-        technicianId,
-        technicianName: tech ? tech.name : 'Técnico',
-        vehicleFolio,
-        date: new Date(date).toISOString(),
-        costPerUnit: material.cost,
-        totalCost: subtotal
-      });
+    const payload = {
+      materialId,
+      materialName: material.name,
+      unitType: uType,
+      unitSymbol: uType === 'liters' ? 'L' : uType === 'kilos' ? 'kg' : uType === 'centimeters' ? 'cm' : uType === 'parts' ? 'partes' : 'pza',
+      quantity: deduction,
+      quantityFormatted: formattedQty,
+      stockDeducted: deduction,
+      technicianId,
+      technicianName: tech ? tech.name : 'Técnico',
+      vehicleFolio,
+      date: new Date(date).toISOString(),
+      costPerUnit: material.cost,
+      totalCost: subtotal,
+      dispatchMode,
+      containerCount,
+      subQuantity,
+      baseQuantity,
+      customContainerCap,
+      customContainerUnit
+    };
 
-      setSuccess('Salida registrada exitosamente.');
+    try {
+      if (editingOutgoingId) {
+        if (!isAdmin) {
+          throw new Error("Únicamente el administrador puede modificar registros de salidas.");
+        }
+        await updateOutgoing(editingOutgoingId, payload, currentUser?.role);
+        setSuccess('Salida modificada exitosamente.');
+      } else {
+        await registerOutgoing(payload);
+        setSuccess('Salida registrada exitosamente.');
+      }
       loadAllData();
       setTimeout(() => {
         setShowAddModal(false);
         setSuccess('');
+        setEditingOutgoingId(null);
       }, 1200);
     } catch (err) {
       setError(err.message || 'Error al guardar la salida.');
@@ -376,12 +475,13 @@ const Outgoings = ({ currentUser }) => {
                 <th>Vehículo</th>
                 <th style={{ textAlign: 'right' }}>Costo Unit (s/IVA)</th>
                 <th style={{ textAlign: 'right' }}>Total (c/IVA)</th>
+                {isAdmin && <th style={{ textAlign: 'center' }}>Acciones</th>}
               </tr>
             </thead>
             <tbody>
               {filteredOutgoings.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ textAlign: 'center', padding: '2rem' }}>
+                  <td colSpan={isAdmin ? 8 : 7} style={{ textAlign: 'center', padding: '2rem' }}>
                     No se han registrado salidas en el sistema.
                   </td>
                 </tr>
@@ -425,6 +525,28 @@ const Outgoings = ({ currentUser }) => {
                       <td style={{ textAlign: 'right', fontWeight: 'bold', color: '#34d399' }}>
                         ${(tot * 1.16).toFixed(2)}
                       </td>
+                      {isAdmin && (
+                        <td style={{ textAlign: 'center' }}>
+                          <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+                            <button
+                              onClick={() => handleOpenEdit(out)}
+                              className="btn btn-secondary btn-sm"
+                              style={{ padding: '0.35rem' }}
+                              title="Modificar Salida"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(out)}
+                              className="btn btn-danger btn-sm"
+                              style={{ padding: '0.35rem' }}
+                              title="Eliminar Salida"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </td>
+                      )}
                     </tr>
                   );
                 })
@@ -434,12 +556,12 @@ const Outgoings = ({ currentUser }) => {
         </div>
       )}
 
-      {/* Add Modal */}
+      {/* Add / Edit Modal */}
       {showAddModal && (
         <div className="modal-overlay">
           <div className="glass-panel modal-content" style={{ maxWidth: '640px', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="modal-header">
-              <h3 className="modal-title">Registrar Salida de Material</h3>
+              <h3 className="modal-title">{editingOutgoingId ? 'Modificar Salida de Material' : 'Registrar Salida de Material'}</h3>
               <button className="modal-close" onClick={() => setShowAddModal(false)}>✕</button>
             </div>
 
@@ -1005,9 +1127,9 @@ const Outgoings = ({ currentUser }) => {
                 <button 
                   type="submit" 
                   className="btn btn-primary" 
-                  disabled={!selectedMaterialObj || parseFloat(selectedMaterialObj.quantity) < totalDeduction || totalDeduction <= 0}
+                  disabled={!selectedMaterialObj || totalDeduction <= 0}
                 >
-                  Registrar Salida
+                  {editingOutgoingId ? 'Guardar Cambios' : 'Registrar Salida'}
                 </button>
               </div>
             </form>

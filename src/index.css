@@ -2010,12 +2010,26 @@ input:checked + .slider:before {
     font-size: 0.72rem;
   }
 
-  .parts-master-table thead th {
-    font-size: 0.62rem;
-    padding: 0.6rem 0.4rem;
-  }
-
   .parts-table-row td {
     padding: 0.55rem 0.4rem;
   }
+}
+
+@keyframes pulseDot {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+.pulse-dot {
+  animation: pulseDot 2s infinite;
 }

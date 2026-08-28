@@ -25,6 +25,19 @@ const Reports = () => {
 
   useEffect(() => {
     loadData();
+    const intervalId = setInterval(() => {
+      loadData();
+    }, 6000);
+
+    const handleDataChanged = () => loadData();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+    };
   }, []);
 
   // CALCULATIONS

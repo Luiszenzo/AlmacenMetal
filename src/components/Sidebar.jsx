@@ -52,26 +52,41 @@ const Sidebar = ({ currentView, setView, user, onLogout, isFirebaseConnected }) 
       </ul>
 
       <div className="sidebar-user">
-        <div 
-          onClick={!isFirebaseConnected ? resetFirebaseConnection : undefined}
-          style={{ 
-            display: 'flex', 
-            alignItems: 'center', 
-            gap: '8px', 
-            marginBottom: '12px',
-            cursor: !isFirebaseConnected ? 'pointer' : 'default',
-            padding: !isFirebaseConnected ? '6px 10px' : '0px',
-            borderRadius: '8px',
-            background: !isFirebaseConnected ? 'rgba(245, 158, 11, 0.08)' : 'transparent',
-            border: !isFirebaseConnected ? '1px dashed rgba(245, 158, 11, 0.2)' : 'none',
-            width: 'fit-content'
-          }}
-          title={!isFirebaseConnected ? "Click para intentar conectar a Firebase Cloud nuevamente" : undefined}
-        >
-          <Database size={14} color={isFirebaseConnected ? '#10b981' : '#f59e0b'} />
-          <span style={{ fontSize: '0.72rem', color: isFirebaseConnected ? '#34d399' : '#fbbf24', fontWeight: 500 }}>
-            {isFirebaseConnected ? 'Firebase Nube' : 'Modo Local (Conectar)'}
-          </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+          <div 
+            onClick={!isFirebaseConnected ? resetFirebaseConnection : undefined}
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '8px', 
+              cursor: !isFirebaseConnected ? 'pointer' : 'default',
+              padding: !isFirebaseConnected ? '6px 10px' : '0px',
+              borderRadius: '8px',
+              background: !isFirebaseConnected ? 'rgba(245, 158, 11, 0.08)' : 'transparent',
+              border: !isFirebaseConnected ? '1px dashed rgba(245, 158, 11, 0.2)' : 'none',
+              width: 'fit-content'
+            }}
+            title={!isFirebaseConnected ? "Click para intentar conectar a Firebase Cloud nuevamente" : undefined}
+          >
+            <Database size={14} color={isFirebaseConnected ? '#10b981' : '#f59e0b'} />
+            <span style={{ fontSize: '0.72rem', color: isFirebaseConnected ? '#34d399' : '#fbbf24', fontWeight: 500 }}>
+              {isFirebaseConnected ? 'Firebase Nube' : 'Modo Local (Conectar)'}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: '#10b981',
+              boxShadow: '0 0 8px #10b981',
+              display: 'inline-block'
+            }} className="pulse-dot" />
+            <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 500 }}>
+              Sincronización en vivo
+            </span>
+          </div>
         </div>
         
         <div className="user-info">

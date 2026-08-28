@@ -19,7 +19,8 @@ import {
   where,
   orderBy,
   runTransaction,
-  writeBatch
+  writeBatch,
+  onSnapshot
 } from "firebase/firestore";
 import { 
   createUserWithEmailAndPassword, 
@@ -28,6 +29,41 @@ import {
   onAuthStateChanged,
   getAuth
 } from "firebase/auth";
+
+// Helper to notify all active views of local/cloud data changes
+export const notifyDataChanged = () => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('workshop_data_changed'));
+  }
+};
+
+// Generic Realtime Subscription Helper
+export const subscribeToCollection = (collectionName, callback) => {
+  if (useLocalFallback) {
+    const handleLocal = () => callback(null);
+    window.addEventListener('workshop_data_changed', handleLocal);
+    return () => window.removeEventListener('workshop_data_changed', handleLocal);
+  }
+  try {
+    const unsubscribe = onSnapshot(
+      collection(db, collectionName),
+      (snapshot) => {
+        const items = [];
+        snapshot.forEach((docSnap) => {
+          items.push({ id: docSnap.id, folio: docSnap.id, ...docSnap.data() });
+        });
+        callback(items);
+      },
+      (error) => {
+        console.warn(`Snapshot listener error for ${collectionName}:`, error?.message);
+      }
+    );
+    return unsubscribe;
+  } catch (err) {
+    console.warn(`Could not setup subscription for ${collectionName}:`, err?.message);
+    return () => {};
+  }
+};
 
 // Helper to check if Firebase is connected / ready (runs check on firestore)
 export let useLocalFallback = localStorage.getItem("workshop_use_local_fallback") === "true";
@@ -698,6 +734,205 @@ export const registerOutgoing = async (outgoing) => {
     return registerOutgoing(outgoing);
   }
 };
+
+export const deleteOutgoing = async (outgoingId, currentUserRole) => {
+  if (currentUserRole !== 'admin') {
+    throw new Error("Acceso denegado: Solo el administrador puede eliminar registros de salidas.");
+  }
+
+  if (useLocalFallback) {
+    const items = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
+    const outgoings = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+
+    const outIndex = outgoings.findIndex(o => o.id === outgoingId);
+    if (outIndex === -1) throw new Error("Registro de salida no encontrado.");
+
+    const targetOut = outgoings[outIndex];
+    const restoreAmount = parseFloat(targetOut.stockDeducted !== undefined ? targetOut.stockDeducted : targetOut.quantity) || 0;
+
+    const matIndex = items.findIndex(i => i.id === targetOut.materialId);
+    if (matIndex !== -1) {
+      const currentStock = parseFloat(items[matIndex].quantity) || 0;
+      items[matIndex].quantity = Math.round((currentStock + restoreAmount) * 1000) / 1000;
+      localStorage.setItem("workshop_inventory", JSON.stringify(items));
+    }
+
+    outgoings.splice(outIndex, 1);
+    localStorage.setItem("workshop_outgoings", JSON.stringify(outgoings));
+    return true;
+  }
+
+  try {
+    const outgoingRef = doc(db, "outgoings", outgoingId);
+
+    await runTransaction(db, async (transaction) => {
+      const outDoc = await transaction.get(outgoingRef);
+      if (!outDoc.exists()) {
+        throw new Error("El registro de salida no existe.");
+      }
+
+      const outData = outDoc.data();
+      const restoreAmount = parseFloat(outData.stockDeducted !== undefined ? outData.stockDeducted : outData.quantity) || 0;
+
+      if (outData.materialId) {
+        const inventoryRef = doc(db, "inventory", outData.materialId);
+        const invDoc = await transaction.get(inventoryRef);
+        if (invDoc.exists()) {
+          const currentStock = parseFloat(invDoc.data().quantity) || 0;
+          const newQty = Math.round((currentStock + restoreAmount) * 1000) / 1000;
+          transaction.update(inventoryRef, { quantity: newQty });
+        }
+      }
+
+      transaction.delete(outgoingRef);
+    });
+
+    // Clean local cache as well
+    try {
+      const outgoings = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+      const updatedLocal = outgoings.filter(o => o.id !== outgoingId);
+      localStorage.setItem("workshop_outgoings", JSON.stringify(updatedLocal));
+    } catch (e) {
+      console.warn("Error cleaning local outgoings cache:", e);
+    }
+
+    return true;
+  } catch (e) {
+    console.error("deleteOutgoing error: ", e);
+    if (e.message && (e.message.includes("Acceso denegado") || e.message.includes("no existe"))) {
+      throw e;
+    }
+    useLocalFallback = true;
+    return deleteOutgoing(outgoingId, currentUserRole);
+  }
+};
+
+export const updateOutgoing = async (outgoingId, updatedOutgoing, currentUserRole) => {
+  if (currentUserRole !== 'admin') {
+    throw new Error("Acceso denegado: Solo el administrador puede modificar registros de salidas.");
+  }
+
+  const newDeductAmount = parseFloat(updatedOutgoing.stockDeducted !== undefined ? updatedOutgoing.stockDeducted : updatedOutgoing.quantity) || 0;
+
+  if (useLocalFallback) {
+    const items = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
+    const outgoings = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+
+    const outIndex = outgoings.findIndex(o => o.id === outgoingId);
+    if (outIndex === -1) throw new Error("Registro de salida no encontrado.");
+
+    const oldOut = outgoings[outIndex];
+    const oldDeductAmount = parseFloat(oldOut.stockDeducted !== undefined ? oldOut.stockDeducted : oldOut.quantity) || 0;
+
+    if (oldOut.materialId === updatedOutgoing.materialId) {
+      const matIndex = items.findIndex(i => i.id === updatedOutgoing.materialId);
+      if (matIndex === -1) throw new Error("Material no encontrado.");
+
+      const currentStock = parseFloat(items[matIndex].quantity) || 0;
+      const netChange = newDeductAmount - oldDeductAmount;
+      if (currentStock - netChange < 0) {
+        throw new Error(`Stock insuficiente. Solo quedan ${currentStock} en existencia.`);
+      }
+
+      items[matIndex].quantity = Math.round((currentStock - netChange) * 1000) / 1000;
+    } else {
+      // Restore stock on old material
+      const oldMatIndex = items.findIndex(i => i.id === oldOut.materialId);
+      if (oldMatIndex !== -1) {
+        const oldStock = parseFloat(items[oldMatIndex].quantity) || 0;
+        items[oldMatIndex].quantity = Math.round((oldStock + oldDeductAmount) * 1000) / 1000;
+      }
+      // Deduct stock on new material
+      const newMatIndex = items.findIndex(i => i.id === updatedOutgoing.materialId);
+      if (newMatIndex === -1) throw new Error("Nuevo material no encontrado.");
+      const newStock = parseFloat(items[newMatIndex].quantity) || 0;
+      if (newStock < newDeductAmount) {
+        throw new Error(`Stock insuficiente en ${items[newMatIndex].name}. Solo quedan ${newStock} en existencia.`);
+      }
+      items[newMatIndex].quantity = Math.round((newStock - newDeductAmount) * 1000) / 1000;
+    }
+
+    localStorage.setItem("workshop_inventory", JSON.stringify(items));
+
+    const updatedRecord = {
+      ...oldOut,
+      ...updatedOutgoing,
+      quantity: parseFloat(updatedOutgoing.quantity) || 0,
+      stockDeducted: newDeductAmount,
+      id: outgoingId,
+    };
+    outgoings[outIndex] = updatedRecord;
+    localStorage.setItem("workshop_outgoings", JSON.stringify(outgoings));
+    return updatedRecord;
+  }
+
+  try {
+    const outgoingRef = doc(db, "outgoings", outgoingId);
+
+    await runTransaction(db, async (transaction) => {
+      const outDoc = await transaction.get(outgoingRef);
+      if (!outDoc.exists()) {
+        throw new Error("El registro de salida no existe.");
+      }
+
+      const oldOut = outDoc.data();
+      const oldDeductAmount = parseFloat(oldOut.stockDeducted !== undefined ? oldOut.stockDeducted : oldOut.quantity) || 0;
+
+      if (oldOut.materialId === updatedOutgoing.materialId) {
+        const inventoryRef = doc(db, "inventory", updatedOutgoing.materialId);
+        const invDoc = await transaction.get(inventoryRef);
+        if (!invDoc.exists()) throw new Error("El material no existe en el inventario.");
+
+        const currentStock = parseFloat(invDoc.data().quantity) || 0;
+        const netChange = newDeductAmount - oldDeductAmount;
+        if (currentStock - netChange < 0) {
+          throw new Error(`Stock insuficiente. Solo quedan ${currentStock} en existencia.`);
+        }
+
+        transaction.update(inventoryRef, { quantity: Math.round((currentStock - netChange) * 1000) / 1000 });
+      } else {
+        // Revert old material stock
+        if (oldOut.materialId) {
+          const oldInvRef = doc(db, "inventory", oldOut.materialId);
+          const oldInvDoc = await transaction.get(oldInvRef);
+          if (oldInvDoc.exists()) {
+            const oldStock = parseFloat(oldInvDoc.data().quantity) || 0;
+            transaction.update(oldInvRef, { quantity: Math.round((oldStock + oldDeductAmount) * 1000) / 1000 });
+          }
+        }
+        // Deduct from new material
+        const newInvRef = doc(db, "inventory", updatedOutgoing.materialId);
+        const newInvDoc = await transaction.get(newInvRef);
+        if (!newInvDoc.exists()) throw new Error("El nuevo material no existe en el inventario.");
+        const newStock = parseFloat(newInvDoc.data().quantity) || 0;
+        if (newStock < newDeductAmount) {
+          throw new Error(`Stock insuficiente. Solo quedan ${newStock} en existencia.`);
+        }
+        transaction.update(newInvRef, { quantity: Math.round((newStock - newDeductAmount) * 1000) / 1000 });
+      }
+
+      const recordToSave = {
+        ...oldOut,
+        ...updatedOutgoing,
+        quantity: parseFloat(updatedOutgoing.quantity) || 0,
+        stockDeducted: newDeductAmount,
+        id: outgoingId,
+      };
+
+      transaction.update(outgoingRef, recordToSave);
+    });
+
+    return { id: outgoingId, ...updatedOutgoing, stockDeducted: newDeductAmount };
+  } catch (e) {
+    console.error("updateOutgoing error: ", e);
+    if (e.message && (e.message.includes("Stock insuficiente") || e.message.includes("no existe") || e.message.includes("Acceso denegado"))) {
+      throw e;
+    }
+    useLocalFallback = true;
+    return updateOutgoing(outgoingId, updatedOutgoing, currentUserRole);
+  }
+};
+
 
 
 // --- VEHICLE UPDATES / BITÁCORA DIARIA ---

@@ -21,7 +21,8 @@ import {
   deleteOrderedPart,
   getVehicleComments,
   addVehicleComment,
-  getPendingSiniestrosList
+  getPendingSiniestrosList,
+  subscribeToCollection
 } from '../config/dbService';
 import { generateVehiclePDF, generateGeneralPDF, generatePartsPDF } from '../utils/reports';
 import JSZip from 'jszip';
@@ -260,7 +261,30 @@ const Vehicles = ({ currentUser }) => {
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    loadData();
+    // Realtime background polling every 6s
+    const intervalId = setInterval(() => {
+      loadData();
+    }, 6000);
+
+    // Event listener for local/cloud changes
+    const handleDataChanged = () => loadData();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    // Subscribe to realtime firestore snapshot
+    const unsubscribe = subscribeToCollection('vehicles', () => {
+      loadData();
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [loadData]);
 
   const loadVehicleUpdates = async (folio) => {
     setUpdatesLoading(true);

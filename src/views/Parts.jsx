@@ -28,7 +28,8 @@ import {
   getAllPartsList,
   saveOrderedPart,
   deleteOrderedPart,
-  saveProvisionalVehicleForSiniestro
+  saveProvisionalVehicleForSiniestro,
+  subscribeToCollection
 } from '../config/dbService';
 import { generatePartsPDF, exportToCSV } from '../utils/reports';
 
@@ -94,6 +95,24 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
 
   useEffect(() => {
     loadData();
+    const intervalId = setInterval(() => {
+      loadData();
+    }, 6000);
+
+    const handleDataChanged = () => loadData();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    const unsubVehicles = subscribeToCollection('vehicles', () => loadData());
+    const unsubParts = subscribeToCollection('parts', () => loadData());
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+      if (typeof unsubVehicles === 'function') unsubVehicles();
+      if (typeof unsubParts === 'function') unsubParts();
+    };
   }, [loadData]);
 
   // Quick lookup of selected vehicle in the modal

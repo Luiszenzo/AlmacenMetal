@@ -22,7 +22,7 @@ import {
   TrendingUp,
   CreditCard
 } from 'lucide-react';
-import { getInvoicesList, saveInvoice, deleteInvoice, getVehiclesList, saveProvisionalVehicleForSiniestro } from '../config/dbService';
+import { getInvoicesList, saveInvoice, deleteInvoice, getVehiclesList, saveProvisionalVehicleForSiniestro, subscribeToCollection } from '../config/dbService';
 import { generateInvoicesPDF, exportToCSV } from '../utils/reports';
 
 // Currency formatter
@@ -112,6 +112,24 @@ const Invoices = ({ currentUser }) => {
 
   useEffect(() => {
     loadData();
+    const intervalId = setInterval(() => {
+      loadData();
+    }, 6000);
+
+    const handleDataChanged = () => loadData();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    const unsubInvoices = subscribeToCollection('invoices', () => loadData());
+    const unsubVehicles = subscribeToCollection('vehicles', () => loadData());
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+      if (typeof unsubInvoices === 'function') unsubInvoices();
+      if (typeof unsubVehicles === 'function') unsubVehicles();
+    };
   }, []);
 
   // Close vehicle dropdown on outside click

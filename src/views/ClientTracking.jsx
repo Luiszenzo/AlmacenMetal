@@ -93,6 +93,27 @@ const ClientTracking = ({ onBackToLogin }) => {
     }
   };
 
+  // Auto-refresh tracked vehicle status, updates & comments live
+  useEffect(() => {
+    if (!vehicle?.folio) return;
+    const intervalId = setInterval(async () => {
+      try {
+        const [updatedVeh, updatesData, commentsData] = await Promise.all([
+          searchVehicleForClient(vehicle.folio),
+          getVehicleUpdates(vehicle.folio),
+          getVehicleComments(vehicle.folio)
+        ]);
+        if (updatedVeh) setVehicle(updatedVeh);
+        setUpdates(updatesData || []);
+        setComments(commentsData || []);
+      } catch (err) {
+        console.warn('Auto refresh tracked vehicle error:', err);
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [vehicle?.folio]);
+
   const handleQuickSearch = (term) => {
     // Sanitizar término de búsqueda rápida
     const cleanTerm = sanitizeInput(term, 'plate');

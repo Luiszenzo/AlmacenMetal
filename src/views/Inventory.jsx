@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, Edit2, Trash2, FileText, Download, AlertTriangle, Layers, Droplet, Scale, Ruler, Box } from 'lucide-react';
-import { getInventoryList, saveInventoryItem, removeInventoryItem } from '../config/dbService';
+import { getInventoryList, saveInventoryItem, removeInventoryItem, subscribeToCollection } from '../config/dbService';
 import { generateInventoryPDF, exportToCSV } from '../utils/reports';
 
 export const UNIT_TYPES = [
@@ -146,6 +146,24 @@ const Inventory = ({ currentUser }) => {
 
   useEffect(() => {
     loadInventory();
+    const intervalId = setInterval(() => {
+      loadInventory();
+    }, 6000);
+
+    const handleDataChanged = () => loadInventory();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    const unsubscribe = subscribeToCollection('inventory', () => {
+      loadInventory();
+    });
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
   }, []);
 
   // Helper to recalculate base quantity and cost from container parameters

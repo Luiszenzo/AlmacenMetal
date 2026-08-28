@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Users as UsersIcon, Plus, Eye, EyeOff } from 'lucide-react';
-import { getUsersList, createNewUser, toggleUserActiveStatus } from '../config/dbService';
+import { getUsersList, createNewUser, toggleUserActiveStatus, subscribeToCollection } from '../config/dbService';
 
 const Users = ({ currentUser }) => {
   const [users, setUsers] = useState([]);
@@ -27,6 +27,22 @@ const Users = ({ currentUser }) => {
 
   useEffect(() => {
     loadUsers();
+    const intervalId = setInterval(() => {
+      loadUsers();
+    }, 6000);
+
+    const handleDataChanged = () => loadUsers();
+    window.addEventListener('workshop_data_changed', handleDataChanged);
+    window.addEventListener('focus', handleDataChanged);
+
+    const unsubscribe = subscribeToCollection('users', () => loadUsers());
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('workshop_data_changed', handleDataChanged);
+      window.removeEventListener('focus', handleDataChanged);
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
   }, []);
 
   const isTecnico = role === 'tecnico';
