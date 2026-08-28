@@ -27,21 +27,12 @@ const Users = ({ currentUser }) => {
 
   useEffect(() => {
     loadUsers(false);
-    const intervalId = setInterval(() => {
-      loadUsers(true);
-    }, 6000);
 
     const handleDataChanged = () => loadUsers(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
-
-    const unsubscribe = subscribeToCollection('users', () => loadUsers(true));
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
-      if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, []);
 

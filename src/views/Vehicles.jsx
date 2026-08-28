@@ -263,26 +263,13 @@ const Vehicles = ({ currentUser }) => {
 
   useEffect(() => {
     loadData(false);
-    // Realtime background polling every 6s silently
-    const intervalId = setInterval(() => {
-      loadData(true);
-    }, 6000);
 
-    // Event listener for local/cloud changes
+    // Event listener for local mutations
     const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
-
-    // Subscribe to realtime firestore snapshot
-    const unsubscribe = subscribeToCollection('vehicles', () => {
-      loadData(true);
-    });
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
-      if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, [loadData]);
 

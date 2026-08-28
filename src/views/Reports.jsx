@@ -25,18 +25,12 @@ const Reports = () => {
 
   useEffect(() => {
     loadData(false);
-    const intervalId = setInterval(() => {
-      loadData(true);
-    }, 6000);
 
     const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
     };
   }, []);
 

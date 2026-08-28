@@ -112,23 +112,12 @@ const Invoices = ({ currentUser }) => {
 
   useEffect(() => {
     loadData(false);
-    const intervalId = setInterval(() => {
-      loadData(true);
-    }, 6000);
 
     const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
-
-    const unsubInvoices = subscribeToCollection('invoices', () => loadData(true));
-    const unsubVehicles = subscribeToCollection('vehicles', () => loadData(true));
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
-      if (typeof unsubInvoices === 'function') unsubInvoices();
-      if (typeof unsubVehicles === 'function') unsubVehicles();
     };
   }, []);
 

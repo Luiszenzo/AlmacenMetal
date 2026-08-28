@@ -95,23 +95,12 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
 
   useEffect(() => {
     loadData(false);
-    const intervalId = setInterval(() => {
-      loadData(true);
-    }, 6000);
 
     const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
-
-    const unsubVehicles = subscribeToCollection('vehicles', () => loadData(true));
-    const unsubParts = subscribeToCollection('parts', () => loadData(true));
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
-      if (typeof unsubVehicles === 'function') unsubVehicles();
-      if (typeof unsubParts === 'function') unsubParts();
     };
   }, [loadData]);
 

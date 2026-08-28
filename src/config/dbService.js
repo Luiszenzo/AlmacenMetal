@@ -37,32 +37,11 @@ export const notifyDataChanged = () => {
   }
 };
 
-// Generic Realtime Subscription Helper
+// Generic Subscription Helper (Disabled Firestore onSnapshot to save Firebase reads quota)
 export const subscribeToCollection = (collectionName, callback) => {
-  if (useLocalFallback) {
-    const handleLocal = () => callback(null);
-    window.addEventListener('workshop_data_changed', handleLocal);
-    return () => window.removeEventListener('workshop_data_changed', handleLocal);
-  }
-  try {
-    const unsubscribe = onSnapshot(
-      collection(db, collectionName),
-      (snapshot) => {
-        const items = [];
-        snapshot.forEach((docSnap) => {
-          items.push({ id: docSnap.id, folio: docSnap.id, ...docSnap.data() });
-        });
-        callback(items);
-      },
-      (error) => {
-        console.warn(`Snapshot listener error for ${collectionName}:`, error?.message);
-      }
-    );
-    return unsubscribe;
-  } catch (err) {
-    console.warn(`Could not setup subscription for ${collectionName}:`, err?.message);
-    return () => {};
-  }
+  const handleLocal = () => callback(null);
+  window.addEventListener('workshop_data_changed', handleLocal);
+  return () => window.removeEventListener('workshop_data_changed', handleLocal);
 };
 
 // Helper to check if Firebase is connected / ready (runs check on firestore)
@@ -740,6 +719,8 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
     throw new Error("Acceso denegado: Solo el administrador puede eliminar registros de salidas.");
   }
 
+  let targetFolio = null;
+
   if (useLocalFallback) {
     const items = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
     const outgoings = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
@@ -748,6 +729,7 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
     if (outIndex === -1) throw new Error("Registro de salida no encontrado.");
 
     const targetOut = outgoings[outIndex];
+    targetFolio = targetOut.vehicleFolio;
     const restoreAmount = parseFloat(targetOut.stockDeducted !== undefined ? targetOut.stockDeducted : targetOut.quantity) || 0;
 
     const matIndex = items.findIndex(i => i.id === targetOut.materialId);
@@ -759,6 +741,11 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
 
     outgoings.splice(outIndex, 1);
     localStorage.setItem("workshop_outgoings", JSON.stringify(outgoings));
+
+    if (targetFolio) {
+      await checkAndCleanupProvisionalVehicle(targetFolio);
+    }
+    notifyDataChanged();
     return true;
   }
 
@@ -772,6 +759,7 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
       }
 
       const outData = outDoc.data();
+      targetFolio = outData.vehicleFolio;
       const restoreAmount = parseFloat(outData.stockDeducted !== undefined ? outData.stockDeducted : outData.quantity) || 0;
 
       if (outData.materialId) {
@@ -796,6 +784,10 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
       console.warn("Error cleaning local outgoings cache:", e);
     }
 
+    if (targetFolio) {
+      await checkAndCleanupProvisionalVehicle(targetFolio);
+    }
+    notifyDataChanged();
     return true;
   } catch (e) {
     console.error("deleteOutgoing error: ", e);
@@ -1080,6 +1072,8 @@ export const deleteOrderedPart = async (folio, partId) => {
       list[index].deletedPartIds = [...(list[index].deletedPartIds || []), partId];
       localStorage.setItem("workshop_vehicles", JSON.stringify(list));
     }
+    await checkAndCleanupProvisionalVehicle(folio);
+    notifyDataChanged();
     return;
   }
   try {
@@ -1090,6 +1084,8 @@ export const deleteOrderedPart = async (folio, partId) => {
       const parts = (vehicleData.orderedParts || []).filter(p => p.id !== partId);
       await updateDoc(vehicleRef, { orderedParts: parts });
     }
+    await checkAndCleanupProvisionalVehicle(folio);
+    notifyDataChanged();
   } catch (e) {
     console.error("Firestore deleteOrderedPart error:", e);
     const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
@@ -1098,6 +1094,8 @@ export const deleteOrderedPart = async (folio, partId) => {
       list[index].orderedParts = (list[index].orderedParts || []).filter(p => p.id !== partId);
       localStorage.setItem("workshop_vehicles", JSON.stringify(list));
     }
+    await checkAndCleanupProvisionalVehicle(folio);
+    notifyDataChanged();
   }
 };
 
@@ -1396,24 +1394,54 @@ export const saveInvoice = async (invoiceData) => {
 };
 
 export const deleteInvoice = async (invoiceId) => {
-  // 1. Eliminar de LocalStorage
+  let targetFolio = null;
   const localList = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+  const targetInv = localList.find(i => i.id === invoiceId);
+  if (targetInv) {
+    targetFolio = targetInv.vehicleFolio || targetInv.reportNumber;
+  }
+
+  // 1. Eliminar de LocalStorage
   const filtered = localList.filter(i => i.id !== invoiceId);
   localStorage.setItem("workshop_invoices", JSON.stringify(filtered));
 
-  if (useLocalFallback) return true;
+  if (useLocalFallback) {
+    if (targetFolio) {
+      await checkAndCleanupProvisionalVehicle(targetFolio);
+    }
+    notifyDataChanged();
+    return true;
+  }
 
   // 2. Eliminar de Firestore
   try {
+    if (!targetFolio) {
+      try {
+        const invSnap = await getDocs(query(collection(db, "invoices"), where("__name__", "==", invoiceId)));
+        if (!invSnap.empty) {
+          const invData = invSnap.docs[0].data();
+          targetFolio = invData.vehicleFolio || invData.reportNumber;
+        }
+      } catch (err) {}
+    }
+
     await deleteDoc(doc(db, "invoices", invoiceId));
     try {
       await deleteDoc(doc(db, "invoice_docs", `doc_${invoiceId}`));
     } catch (docErr) {
       console.warn("Error deleting invoice_doc:", docErr);
     }
+    if (targetFolio) {
+      await checkAndCleanupProvisionalVehicle(targetFolio);
+    }
+    notifyDataChanged();
     return true;
   } catch (e) {
     console.error("Firestore deleteInvoice error:", e);
+    if (targetFolio) {
+      await checkAndCleanupProvisionalVehicle(targetFolio);
+    }
+    notifyDataChanged();
     return true;
   }
 };
@@ -1422,6 +1450,71 @@ export const deleteInvoice = async (invoiceId) => {
 // ==========================================================================
 // PENDING / PROVISIONAL SINIESTROS SERVICES
 // ==========================================================================
+
+/**
+ * Checks if a vehicle is a provisional/pending vehicle and if it no longer has any
+ * remaining outgoings, invoices, or ordered parts. If so, automatically deletes it.
+ */
+export const checkAndCleanupProvisionalVehicle = async (targetFolio) => {
+  if (!targetFolio) return;
+  const cleanFolio = String(targetFolio).trim();
+  if (!cleanFolio) return;
+
+  try {
+    const vehicles = await getVehiclesList();
+    const provisional = vehicles.find(v => 
+      (v.folio === cleanFolio || v.orderNumber === cleanFolio || v.siniestro === cleanFolio) &&
+      (v.isPendingRegistration === true || v.model === "Siniestro sin alta" || (v.folio && v.folio.startsWith("SIN-")))
+    );
+
+    if (!provisional) return; // Not a pending/provisional vehicle
+
+    // Check if any other outgoings refer to this provisional vehicle
+    const outgoings = await getOutgoingsList();
+    const hasRemainingOutgoings = outgoings.some(o => 
+      o.vehicleFolio === provisional.folio || 
+      o.vehicleFolio === provisional.orderNumber ||
+      (o.vehicleFolio && provisional.orderNumber && o.vehicleFolio.toUpperCase() === provisional.orderNumber.toUpperCase())
+    );
+    if (hasRemainingOutgoings) return; // Still has other outgoings
+
+    // Check if any other invoices refer to this provisional vehicle
+    const invoices = await getInvoicesList();
+    const hasRemainingInvoices = invoices.some(i => 
+      i.vehicleFolio === provisional.folio || 
+      i.vehicleFolio === provisional.orderNumber ||
+      (i.reportNumber && provisional.orderNumber && i.reportNumber.toUpperCase() === provisional.orderNumber.toUpperCase())
+    );
+    if (hasRemainingInvoices) return; // Still has other invoices
+
+    // Check if any ordered parts remain on this provisional vehicle
+    const hasRemainingParts = (provisional.orderedParts || []).length > 0;
+    if (hasRemainingParts) return; // Still has ordered parts
+
+    // If NO remaining outgoings, invoices, or parts, DELETE the provisional vehicle!
+    // 1. Remove from LocalStorage
+    const localVehicles = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+    const filteredLocal = localVehicles.filter(v => v.folio !== provisional.folio);
+    localStorage.setItem("workshop_vehicles", JSON.stringify(filteredLocal));
+
+    // 2. Remove from Firestore
+    if (!useLocalFallback) {
+      try {
+        await deleteDoc(doc(db, "vehicles", provisional.folio));
+        try {
+          await deleteDoc(doc(db, "vehicle_docs", `${provisional.folio}_admission`));
+          await deleteDoc(doc(db, "vehicle_docs", `${provisional.folio}_inventory`));
+        } catch (docErr) {}
+      } catch (fErr) {
+        console.warn("Firestore delete provisional vehicle error:", fErr);
+      }
+    }
+
+    notifyDataChanged();
+  } catch (err) {
+    console.warn("Error cleaning up provisional vehicle:", err);
+  }
+};
 
 /**
  * Creates or retrieves a provisional vehicle record for a Siniestro that has not yet been registered.

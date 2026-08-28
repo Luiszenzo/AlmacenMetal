@@ -146,23 +146,12 @@ const Inventory = ({ currentUser }) => {
 
   useEffect(() => {
     loadInventory(false);
-    const intervalId = setInterval(() => {
-      loadInventory(true);
-    }, 6000);
 
     const handleDataChanged = () => loadInventory(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
-
-    const unsubscribe = subscribeToCollection('inventory', () => {
-      loadInventory(true);
-    });
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
-      if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, []);
 

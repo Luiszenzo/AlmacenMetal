@@ -98,23 +98,12 @@ const Outgoings = ({ currentUser }) => {
 
   useEffect(() => {
     loadAllData(false);
-    const intervalId = setInterval(() => {
-      loadAllData(true);
-    }, 6000);
 
     const handleDataChanged = () => loadAllData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
-    window.addEventListener('focus', handleDataChanged);
-
-    const unsubOutgoings = subscribeToCollection('outgoings', () => loadAllData(true));
-    const unsubInventory = subscribeToCollection('inventory', () => loadAllData(true));
 
     return () => {
-      clearInterval(intervalId);
       window.removeEventListener('workshop_data_changed', handleDataChanged);
-      window.removeEventListener('focus', handleDataChanged);
-      if (typeof unsubOutgoings === 'function') unsubOutgoings();
-      if (typeof unsubInventory === 'function') unsubInventory();
     };
   }, []);
 
