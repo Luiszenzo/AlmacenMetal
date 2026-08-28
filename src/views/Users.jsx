@@ -13,29 +13,29 @@ const Users = ({ currentUser }) => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const loadUsers = async () => {
-    setLoading(true);
+  const loadUsers = async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const data = await getUsersList();
       setUsers(data);
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadUsers();
+    loadUsers(false);
     const intervalId = setInterval(() => {
-      loadUsers();
+      loadUsers(true);
     }, 6000);
 
-    const handleDataChanged = () => loadUsers();
+    const handleDataChanged = () => loadUsers(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 
-    const unsubscribe = subscribeToCollection('users', () => loadUsers());
+    const unsubscribe = subscribeToCollection('users', () => loadUsers(true));
 
     return () => {
       clearInterval(intervalId);

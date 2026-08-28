@@ -71,8 +71,8 @@ const Outgoings = ({ currentUser }) => {
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
   const isAdmin = currentUser?.role === 'admin';
 
-  const loadAllData = async () => {
-    setLoading(true);
+  const loadAllData = async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const [outRes, invRes, vehRes, usrRes] = await Promise.allSettled([
         getOutgoingsList(),
@@ -92,22 +92,22 @@ const Outgoings = ({ currentUser }) => {
     } catch (err) {
       console.error('Error cargando datos de salidas:', err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadAllData();
+    loadAllData(false);
     const intervalId = setInterval(() => {
-      loadAllData();
+      loadAllData(true);
     }, 6000);
 
-    const handleDataChanged = () => loadAllData();
+    const handleDataChanged = () => loadAllData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 
-    const unsubOutgoings = subscribeToCollection('outgoings', () => loadAllData());
-    const unsubInventory = subscribeToCollection('inventory', () => loadAllData());
+    const unsubOutgoings = subscribeToCollection('outgoings', () => loadAllData(true));
+    const unsubInventory = subscribeToCollection('inventory', () => loadAllData(true));
 
     return () => {
       clearInterval(intervalId);

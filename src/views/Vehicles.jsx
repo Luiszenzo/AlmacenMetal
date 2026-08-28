@@ -241,8 +241,8 @@ const Vehicles = ({ currentUser }) => {
   };
 
   // ---- Data Loading ----
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const [vList, oList, invList, pList] = await Promise.all([
         getVehiclesList(),
@@ -257,25 +257,25 @@ const Vehicles = ({ currentUser }) => {
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
-    // Realtime background polling every 6s
+    loadData(false);
+    // Realtime background polling every 6s silently
     const intervalId = setInterval(() => {
-      loadData();
+      loadData(true);
     }, 6000);
 
     // Event listener for local/cloud changes
-    const handleDataChanged = () => loadData();
+    const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 
     // Subscribe to realtime firestore snapshot
     const unsubscribe = subscribeToCollection('vehicles', () => {
-      loadData();
+      loadData(true);
     });
 
     return () => {

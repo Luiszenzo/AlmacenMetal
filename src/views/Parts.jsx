@@ -75,8 +75,8 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
 
   // Load Data
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const [vResult, pResult] = await Promise.allSettled([
         getVehiclesList(),
@@ -89,22 +89,22 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
     } catch (err) {
       console.error('Error cargando refacciones y vehículos:', err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    loadData();
+    loadData(false);
     const intervalId = setInterval(() => {
-      loadData();
+      loadData(true);
     }, 6000);
 
-    const handleDataChanged = () => loadData();
+    const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 
-    const unsubVehicles = subscribeToCollection('vehicles', () => loadData());
-    const unsubParts = subscribeToCollection('parts', () => loadData());
+    const unsubVehicles = subscribeToCollection('vehicles', () => loadData(true));
+    const unsubParts = subscribeToCollection('parts', () => loadData(true));
 
     return () => {
       clearInterval(intervalId);

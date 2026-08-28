@@ -9,8 +9,8 @@ const Reports = () => {
   const [loading, setLoading] = useState(true);
   const [selectedVehicleFolio, setSelectedVehicleFolio] = useState('');
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const vList = await getVehiclesList();
       const oList = await getOutgoingsList();
@@ -19,17 +19,17 @@ const Reports = () => {
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
     const intervalId = setInterval(() => {
-      loadData();
+      loadData(true);
     }, 6000);
 
-    const handleDataChanged = () => loadData();
+    const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 

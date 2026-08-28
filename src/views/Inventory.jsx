@@ -132,30 +132,30 @@ const Inventory = ({ currentUser }) => {
 
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
 
-  const loadInventory = async () => {
-    setLoading(true);
+  const loadInventory = async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const data = await getInventoryList();
       setItems(data);
     } catch (err) {
       console.error(err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadInventory();
+    loadInventory(false);
     const intervalId = setInterval(() => {
-      loadInventory();
+      loadInventory(true);
     }, 6000);
 
-    const handleDataChanged = () => loadInventory();
+    const handleDataChanged = () => loadInventory(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 
     const unsubscribe = subscribeToCollection('inventory', () => {
-      loadInventory();
+      loadInventory(true);
     });
 
     return () => {

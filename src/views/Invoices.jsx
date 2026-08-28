@@ -94,8 +94,8 @@ const Invoices = ({ currentUser }) => {
   const isAuthorized = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
 
   // Load data
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (isSilent = false) => {
+    if (!isSilent) setLoading(true);
     try {
       const [invList, vehList] = await Promise.all([
         getInvoicesList(),
@@ -106,22 +106,22 @@ const Invoices = ({ currentUser }) => {
     } catch (err) {
       console.error('Error loading invoices/vehicles:', err);
     } finally {
-      setLoading(false);
+      if (!isSilent) setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    loadData(false);
     const intervalId = setInterval(() => {
-      loadData();
+      loadData(true);
     }, 6000);
 
-    const handleDataChanged = () => loadData();
+    const handleDataChanged = () => loadData(true);
     window.addEventListener('workshop_data_changed', handleDataChanged);
     window.addEventListener('focus', handleDataChanged);
 
-    const unsubInvoices = subscribeToCollection('invoices', () => loadData());
-    const unsubVehicles = subscribeToCollection('vehicles', () => loadData());
+    const unsubInvoices = subscribeToCollection('invoices', () => loadData(true));
+    const unsubVehicles = subscribeToCollection('vehicles', () => loadData(true));
 
     return () => {
       clearInterval(intervalId);
