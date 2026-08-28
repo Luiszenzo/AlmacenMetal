@@ -77,12 +77,14 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      const [vList, pList] = await Promise.all([
+      const [vResult, pResult] = await Promise.allSettled([
         getVehiclesList(),
         getAllPartsList()
       ]);
-      setVehicles(vList || []);
-      setParts(pList || []);
+      setVehicles(vResult.status === 'fulfilled' ? (vResult.value || []) : []);
+      setParts(pResult.status === 'fulfilled' ? (pResult.value || []) : []);
+      if (vResult.status === 'rejected') console.error('Error cargando vehículos:', vResult.reason);
+      if (pResult.status === 'rejected') console.error('Error cargando refacciones:', pResult.reason);
     } catch (err) {
       console.error('Error cargando refacciones y vehículos:', err);
     } finally {
@@ -145,6 +147,8 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
     setFormDeliveryDate(part.deliveryDate || '');
     setFormCost(part.cost !== undefined ? part.cost : '');
     setFormNotes(part.notes || '');
+    setFormError('');
+    setShowModal(true);
   };
 
   // Create & Select provisional vehicle for unregistered siniestro
@@ -878,12 +882,15 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
                       const filtered = vehicles.filter(v =>
                         !q ||
                         (v.orderNumber || '').toLowerCase().includes(q) ||
+                        (v.siniestro || '').toLowerCase().includes(q) ||
                         (v.plate || '').toLowerCase().includes(q) ||
                         (v.brand || '').toLowerCase().includes(q) ||
                         (v.model || '').toLowerCase().includes(q) ||
                         (v.folio || '').toLowerCase().includes(q) ||
-                        (v.serial || '').toLowerCase().includes(q)
-                      ).slice(0, 12);
+                        (v.serial || '').toLowerCase().includes(q) ||
+                        (v.insurance || '').toLowerCase().includes(q) ||
+                        (v.color || '').toLowerCase().includes(q)
+                      ).slice(0, 50);
 
                       return (
                         <div style={{

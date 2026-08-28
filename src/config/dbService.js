@@ -292,20 +292,34 @@ export const toggleUserActiveStatus = async (uid, currentStatus) => {
 // --- INVENTORY SERVICES ---
 
 export const getInventoryList = async () => {
-  if (useLocalFallback) {
-    return JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
-  }
   try {
     const querySnapshot = await getDocs(collection(db, "inventory"));
     const items = [];
     querySnapshot.forEach((doc) => {
       items.push({ id: doc.id, ...doc.data() });
     });
+
+    // Merge & sync local cache
+    try {
+      const local = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
+      const cloudIds = new Set(items.map(i => i.id));
+      local.forEach(li => {
+        if (li.id && !cloudIds.has(li.id)) items.push(li);
+      });
+      localStorage.setItem("workshop_inventory", JSON.stringify(items));
+    } catch (syncErr) {
+      console.warn("Could not sync inventory to local cache:", syncErr);
+    }
+
     return items;
   } catch (e) {
-    console.error("Firestore getInventoryList error:", e);
+    if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
+      console.warn("Firestore getInventoryList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
+    } else {
+      console.error("Firestore getInventoryList error:", e);
+    }
     useLocalFallback = true;
-    return getInventoryList();
+    return JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
   }
 };
 
@@ -365,7 +379,7 @@ export const getVehiclesList = async () => {
     const snapshot = await getDocs(collection(db, "vehicles"));
     useLocalFallback = false;
     const list = [];
-    snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
+    snapshot.forEach(d => list.push({ id: d.id, folio: d.id, ...d.data() }));
 
     // Fetch photos and heavy docs from separate collections in parallel
     try {
@@ -404,6 +418,51 @@ export const getVehiclesList = async () => {
       });
     } catch (extraErr) {
       console.warn("Extra docs/photos fetch error:", extraErr);
+    }
+
+    // Sync and merge with localStorage cache for fallback operations
+    try {
+      const localList = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+      const localMap = new Map(localList.map(lv => [lv.folio, lv]));
+
+      // Merge local parts & fields into cloud list
+      list.forEach(v => {
+        const lv = localMap.get(v.folio);
+        if (lv) {
+          const deletedIds = new Set(lv.deletedPartIds || []);
+          const cloudParts = (v.orderedParts || []).filter(p => !deletedIds.has(p.id));
+
+          if (lv.orderedParts && lv.orderedParts.length > 0) {
+            const partMap = new Map();
+            cloudParts.forEach(p => { if (p.id) partMap.set(p.id, p); });
+            lv.orderedParts.forEach(p => {
+              if (p.id && !deletedIds.has(p.id)) {
+                partMap.set(p.id, { ...partMap.get(p.id), ...p });
+              }
+            });
+            v.orderedParts = Array.from(partMap.values());
+          } else {
+            v.orderedParts = cloudParts;
+          }
+        }
+      });
+
+      // Include local-only vehicles if any
+      const cloudFolios = new Set(list.map(v => v.folio));
+      localList.forEach(lv => {
+        if (lv.folio && !cloudFolios.has(lv.folio)) {
+          list.push(lv);
+        }
+      });
+
+      // Strip heavy base64 data to avoid exceeding localStorage quota
+      const lightList = list.map(v => {
+        const { imageUrls, admissionPassUrl, inventoryDocUrl, primaryPhoto, ...rest } = v;
+        return rest;
+      });
+      localStorage.setItem("workshop_vehicles", JSON.stringify(lightList));
+    } catch (syncErr) {
+      console.warn("Could not sync vehicles to localStorage:", syncErr);
     }
 
     return list;
@@ -532,20 +591,35 @@ export const toggleVehicleStatus = async (folio, currentStatus) => {
 // --- OUTGOINGS / TRANSACTION SERVICES ---
 
 export const getOutgoingsList = async () => {
-  if (useLocalFallback) {
-    return JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
-  }
   try {
     const querySnapshot = await getDocs(collection(db, "outgoings"));
     const list = [];
     querySnapshot.forEach((doc) => {
       list.push({ id: doc.id, ...doc.data() });
     });
+
+    // Merge & sync local cache
+    try {
+      const local = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+      const cloudIds = new Set(list.map(o => o.id));
+      local.forEach(lo => {
+        if (lo.id && !cloudIds.has(lo.id)) list.push(lo);
+      });
+      localStorage.setItem("workshop_outgoings", JSON.stringify(list));
+    } catch (syncErr) {
+      console.warn("Could not sync outgoings to local cache:", syncErr);
+    }
+
     return list.sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort by date descending
   } catch (e) {
-    console.error("Firestore getOutgoingsList error:", e);
+    if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
+      console.warn("Firestore getOutgoingsList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
+    } else {
+      console.error("Firestore getOutgoingsList error:", e);
+    }
     useLocalFallback = true;
-    return getOutgoingsList();
+    const local = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+    return local.sort((a, b) => new Date(b.date) - new Date(a.date));
   }
 };
 
@@ -617,12 +691,11 @@ export const registerOutgoing = async (outgoing) => {
     return { id: outgoingId, ...outgoing, stockDeducted: deductAmount };
   } catch (e) {
     console.error("Transaction failed: ", e);
-    // If it's a firebase error and we didn't fall back yet
-    if (e.message.includes("permission-denied") || e.message.includes("offline")) {
-      useLocalFallback = true;
-      return registerOutgoing(outgoing);
+    if (e.message && (e.message.includes("Stock insuficiente") || e.message.includes("no existe"))) {
+      throw e;
     }
-    throw e;
+    useLocalFallback = true;
+    return registerOutgoing(outgoing);
   }
 };
 
@@ -715,8 +788,12 @@ export const saveOrderedPart = async (folio, part) => {
 
   if (useLocalFallback) {
     const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
-    const index = list.findIndex(v => v.folio === folio);
-    if (index === -1) throw new Error("Vehículo no encontrado.");
+    let index = list.findIndex(v => v.folio === folio);
+    if (index === -1) {
+      // Vehicle exists in Firestore but not in localStorage cache — create a minimal entry
+      list.push({ folio, orderedParts: [], active: true });
+      index = list.length - 1;
+    }
     
     const parts = list[index].orderedParts || [];
     if (cleanPart.id) {
@@ -765,6 +842,7 @@ export const deleteOrderedPart = async (folio, partId) => {
     if (index !== -1) {
       const parts = (list[index].orderedParts || []).filter(p => p.id !== partId);
       list[index].orderedParts = parts;
+      list[index].deletedPartIds = [...(list[index].deletedPartIds || []), partId];
       localStorage.setItem("workshop_vehicles", JSON.stringify(list));
     }
     return;
@@ -972,10 +1050,6 @@ export const addVehicleComment = async (commentData) => {
 // --- INVOICES SERVICES (GESTIÓN DE FACTURAS EMITIDAS) ---
 
 export const getInvoicesList = async () => {
-  if (useLocalFallback) {
-    const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
-    return local.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
-  }
   try {
     const snapshot = await getDocs(collection(db, "invoices"));
     const list = [];

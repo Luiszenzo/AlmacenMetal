@@ -60,17 +60,23 @@ const Outgoings = ({ currentUser }) => {
   const loadAllData = async () => {
     setLoading(true);
     try {
-      const outList = await getOutgoingsList();
-      const invList = await getInventoryList();
-      const vehList = await getVehiclesList();
-      const usrList = await getUsersList();
+      const [outRes, invRes, vehRes, usrRes] = await Promise.allSettled([
+        getOutgoingsList(),
+        getInventoryList(),
+        getVehiclesList(),
+        getUsersList()
+      ]);
       
-      setOutgoings(outList);
-      setInventory(invList);
-      setVehicles(vehList.filter(v => v.active)); // Only active vehicles can receive parts
-      setTechnicians(usrList.filter(u => u.role === 'tecnico' && u.active));
+      setOutgoings(outRes.status === 'fulfilled' ? (outRes.value || []) : []);
+      setInventory(invRes.status === 'fulfilled' ? (invRes.value || []) : []);
+      
+      const vehList = vehRes.status === 'fulfilled' ? (vehRes.value || []) : [];
+      setVehicles(vehList.filter(v => v.active !== false));
+      
+      const usrList = usrRes.status === 'fulfilled' ? (usrRes.value || []) : [];
+      setTechnicians(usrList.filter(u => u.role === 'tecnico' && u.active !== false));
     } catch (err) {
-      console.error(err);
+      console.error('Error cargando datos de salidas:', err);
     } finally {
       setLoading(false);
     }
