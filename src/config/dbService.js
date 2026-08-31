@@ -1743,6 +1743,134 @@ export const getPendingSiniestrosList = async () => {
   }
 };
 
+/**
+ * Force-deletes a pending/provisional vehicle and ALL related data:
+ * outgoings, invoices, ordered parts, vehicle updates/bitácora, and vehicle_docs.
+ * Only for isPendingRegistration vehicles. Returns a summary of what was deleted.
+ */
+export const deletePendingSiniestroForced = async (provisionalFolio) => {
+  const cleanFolio = String(provisionalFolio || '').trim();
+  if (!cleanFolio) throw new Error("Folio de vehículo provisional requerido.");
 
+  try {
+    const vehicles = await getVehiclesList();
+    const provisional = vehicles.find(v =>
+      (v.folio === cleanFolio || v.orderNumber === cleanFolio || v.siniestro === cleanFolio) &&
+      (v.isPendingRegistration === true || v.model === "Siniestro sin alta" || (v.folio && v.folio.startsWith("SIN-")))
+    );
+
+    if (!provisional) throw new Error("No se encontró el vehículo provisional.");
+
+    const summary = { outgoingsDeleted: 0, invoicesDeleted: 0, partsDeleted: 0, updatesDeleted: 0 };
+
+    // 1. Delete related outgoings
+    const localOutgoings = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+    const outgoingsToDelete = localOutgoings.filter(o =>
+      o.vehicleFolio === provisional.folio ||
+      o.vehicleFolio === provisional.orderNumber ||
+      (o.vehicleFolio && provisional.orderNumber && o.vehicleFolio.toUpperCase() === provisional.orderNumber.toUpperCase())
+    );
+    summary.outgoingsDeleted = outgoingsToDelete.length;
+    const filteredOutgoings = localOutgoings.filter(o => !outgoingsToDelete.some(d => d.id === o.id));
+    localStorage.setItem("workshop_outgoings", JSON.stringify(filteredOutgoings));
+
+    if (!useLocalFallback) {
+      try {
+        const qOut = query(collection(db, "outgoings"), where("vehicleFolio", "in", [provisional.folio, provisional.orderNumber || "__none__"]));
+        const outSnap = await getDocs(qOut);
+        if (!outSnap.empty) {
+          const batchOut = writeBatch(db);
+          outSnap.docs.forEach(d => batchOut.delete(d.ref));
+          await batchOut.commit();
+          summary.outgoingsDeleted = Math.max(summary.outgoingsDeleted, outSnap.size);
+        }
+      } catch (oErr) { console.warn("Error deleting outgoings from Firestore:", oErr); }
+    }
+
+    // 2. Delete related invoices
+    const localInvoices = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+    const invoicesToDelete = localInvoices.filter(i =>
+      i.vehicleFolio === provisional.folio ||
+      i.vehicleFolio === provisional.orderNumber ||
+      (i.reportNumber && provisional.orderNumber && i.reportNumber.toUpperCase() === provisional.orderNumber.toUpperCase())
+    );
+    summary.invoicesDeleted = invoicesToDelete.length;
+    const filteredInvoices = localInvoices.filter(i => !invoicesToDelete.some(d => d.id === i.id));
+    localStorage.setItem("workshop_invoices", JSON.stringify(filteredInvoices));
+
+    if (!useLocalFallback) {
+      try {
+        const foliosToCheck = [provisional.folio, provisional.orderNumber || "__none__"];
+        const qInv = query(collection(db, "invoices"), where("vehicleFolio", "in", foliosToCheck));
+        const invSnap = await getDocs(qInv);
+        if (!invSnap.empty) {
+          const batchInv = writeBatch(db);
+          invSnap.docs.forEach(d => {
+            batchInv.delete(d.ref);
+            // Also delete invoice docs
+            try { batchInv.delete(doc(db, "invoice_docs", `doc_${d.id}`)); } catch (_) {}
+          });
+          await batchInv.commit();
+          summary.invoicesDeleted = Math.max(summary.invoicesDeleted, invSnap.size);
+        }
+        // Also check by reportNumber
+        if (provisional.orderNumber) {
+          const qInv2 = query(collection(db, "invoices"), where("reportNumber", "==", provisional.orderNumber.toUpperCase()));
+          const invSnap2 = await getDocs(qInv2);
+          if (!invSnap2.empty) {
+            const batchInv2 = writeBatch(db);
+            invSnap2.docs.forEach(d => {
+              batchInv2.delete(d.ref);
+              try { batchInv2.delete(doc(db, "invoice_docs", `doc_${d.id}`)); } catch (_) {}
+            });
+            await batchInv2.commit();
+            summary.invoicesDeleted += invSnap2.size;
+          }
+        }
+      } catch (iErr) { console.warn("Error deleting invoices from Firestore:", iErr); }
+    }
+
+    // 3. Count and clear ordered parts
+    summary.partsDeleted = (provisional.orderedParts || []).length;
+
+    // 4. Delete vehicle updates / bitácora
+    if (!useLocalFallback) {
+      try {
+        const qUpdates = query(collection(db, "vehicle_updates"), where("vehicleFolio", "==", provisional.folio));
+        const upSnap = await getDocs(qUpdates);
+        if (!upSnap.empty) {
+          const batchUp = writeBatch(db);
+          upSnap.docs.forEach(d => batchUp.delete(d.ref));
+          await batchUp.commit();
+          summary.updatesDeleted = upSnap.size;
+        }
+      } catch (uErr) { console.warn("Error deleting vehicle updates from Firestore:", uErr); }
+    }
+
+    // 5. Delete the provisional vehicle itself
+    // LocalStorage
+    const localVehicles = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+    const filteredVehicles = localVehicles.filter(v => v.folio !== provisional.folio);
+    localStorage.setItem("workshop_vehicles", JSON.stringify(filteredVehicles));
+
+    // Firestore
+    if (!useLocalFallback) {
+      try {
+        await deleteDoc(doc(db, "vehicles", provisional.folio));
+        // vehicle_docs (admission pass, inventory)
+        try { await deleteDoc(doc(db, "vehicle_docs", `${provisional.folio}_admission`)); } catch (_) {}
+        try { await deleteDoc(doc(db, "vehicle_docs", `${provisional.folio}_inventory`)); } catch (_) {}
+      } catch (fErr) {
+        console.warn("Firestore delete provisional vehicle error:", fErr);
+      }
+    }
+
+    notifyDataChanged();
+    return summary;
+  } catch (err) {
+    console.error("deletePendingSiniestroForced error:", err);
+    throw err;
+  }
+};
 
 

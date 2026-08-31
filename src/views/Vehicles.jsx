@@ -22,6 +22,7 @@ import {
   getVehicleComments,
   addVehicleComment,
   getPendingSiniestrosList,
+  deletePendingSiniestroForced,
   subscribeToCollection
 } from '../config/dbService';
 import { generateVehiclePDF, generateGeneralPDF, generatePartsPDF } from '../utils/reports';
@@ -230,6 +231,52 @@ const Vehicles = ({ currentUser }) => {
   const [sliderProgress, setSliderProgress] = useState(0);
 
   const isEditable = currentUser?.role === 'admin' || currentUser?.role === 'encargado';
+  const isAdmin = currentUser?.role === 'admin';
+
+  // ---- Delete Pending Siniestro (Admin only) ----
+  const handleDeletePendingSiniestro = async (ps) => {
+    // Build detailed confirmation message
+    const details = [];
+    if (ps.partsCount > 0) details.push(`🧩 ${ps.partsCount} ${ps.partsCount === 1 ? 'Pieza' : 'Piezas'} ($${ps.partsCost.toFixed(2)})`);
+    if (ps.outgoingsCount > 0) details.push(`📦 ${ps.outgoingsCount} ${ps.outgoingsCount === 1 ? 'Salida de almacén' : 'Salidas de almacén'} ($${ps.outgoingsCost.toFixed(2)})`);
+    if (ps.invoicesCount > 0) details.push(`🧾 ${ps.invoicesCount} ${ps.invoicesCount === 1 ? 'Factura' : 'Facturas'} ($${ps.invoicesTotal.toFixed(2)})`);
+
+    let message = `⚠️ ¿Estás seguro de eliminar el siniestro pendiente "${ps.siniestro}"?\n\n`;
+    if (details.length > 0) {
+      message += `Este siniestro tiene los siguientes registros asociados que TAMBIÉN se eliminarán:\n\n`;
+      message += details.join('\n');
+      message += `\n\n⛔ Esta acción es IRREVERSIBLE y eliminará TODOS los datos vinculados.`;
+    } else {
+      message += `No tiene registros asociados. Se eliminará el registro provisional.`;
+    }
+    message += `\n\n¿Deseas continuar?`;
+
+    if (!window.confirm(message)) return;
+
+    // Second confirmation if has associated data
+    if (details.length > 0) {
+      const secondConfirm = window.confirm(
+        `🔴 CONFIRMACIÓN FINAL\n\nVas a eliminar permanentemente el siniestro "${ps.siniestro}" junto con TODOS sus datos asociados.\n\nEscribe 'Aceptar' mentalmente y confirma para proceder.`
+      );
+      if (!secondConfirm) return;
+    }
+
+    try {
+      const summary = await deletePendingSiniestroForced(ps.folio);
+      await loadData(true);
+      alert(
+        `✅ Siniestro "${ps.siniestro}" eliminado correctamente.\n\n` +
+        `Resumen de eliminación:\n` +
+        `• Salidas eliminadas: ${summary.outgoingsDeleted}\n` +
+        `• Facturas eliminadas: ${summary.invoicesDeleted}\n` +
+        `• Piezas eliminadas: ${summary.partsDeleted}\n` +
+        `• Actualizaciones eliminadas: ${summary.updatesDeleted}`
+      );
+    } catch (err) {
+      console.error('Error deleting pending siniestro:', err);
+      alert(`❌ Error al eliminar: ${err.message}`);
+    }
+  };
 
   const loadVehicleComments = async (folio) => {
     try {
@@ -2114,14 +2161,41 @@ const Vehicles = ({ currentUser }) => {
                 </div>
 
                 {isEditable && (
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-sm"
-                    onClick={() => handleOpenAdd(ps.siniestro)}
-                    style={{ width: '100%', justifyContent: 'center', fontSize: '0.8rem', padding: '0.45rem' }}
-                  >
-                    <Plus size={14} /> Dar de Alta Vehículo
-                  </button>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={() => handleOpenAdd(ps.siniestro)}
+                      style={{ flex: 1, justifyContent: 'center', fontSize: '0.8rem', padding: '0.45rem' }}
+                    >
+                      <Plus size={14} /> Dar de Alta
+                    </button>
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => handleDeletePendingSiniestro(ps)}
+                        title="Eliminar siniestro pendiente y todos sus datos"
+                        style={{
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          color: '#f87171',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          padding: '0.45rem 0.65rem',
+                          borderRadius: '8px',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          fontSize: '0.8rem',
+                          transition: 'all 0.2s ease'
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.3)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.5)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = 'rgba(239, 68, 68, 0.15)'; e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.3)'; }}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
             ))}
