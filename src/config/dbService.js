@@ -1054,6 +1054,20 @@ export const saveOrderedPart = async (folio, part) => {
       parts.push(cleanPart);
     }
     await updateDoc(vehicleRef, { orderedParts: parts });
+
+    // Sync updated orderedParts to localStorage so the merge in getVehiclesList
+    // doesn't overwrite this change with stale local data
+    try {
+      const localList = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+      const localIdx = localList.findIndex(v => v.folio === folio);
+      if (localIdx !== -1) {
+        localList[localIdx].orderedParts = parts;
+        localStorage.setItem("workshop_vehicles", JSON.stringify(localList));
+      }
+    } catch (syncErr) {
+      console.warn("saveOrderedPart: localStorage sync warning:", syncErr);
+    }
+
     return cleanPart;
   } catch (e) {
     console.error("Firestore saveOrderedPart error:", e);

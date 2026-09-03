@@ -222,8 +222,16 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
   const handleQuickStatusChange = async (part, newStatus) => {
     if (!isEditable) return;
     try {
-      await saveOrderedPart(part.vehicleFolio, {
-        ...part,
+      // Strip vehicle-level fields that getAllPartsList adds — they don't belong in orderedParts
+      const {
+        vehicleFolio, vehicleOrderNumber, vehicleBrand, vehicleModel,
+        vehicleYear, vehicleColor, vehiclePlate, vehicleSerial,
+        vehicleLocation, vehicleType, vehicleActive,
+        ...partOnly
+      } = part;
+
+      await saveOrderedPart(vehicleFolio, {
+        ...partOnly,
         purchaseOrder: newStatus.toUpperCase(),
         status: newStatus.toLowerCase()
       });
