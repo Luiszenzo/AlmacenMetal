@@ -56,6 +56,11 @@ const Outgoings = ({ currentUser }) => {
   const [vehicleSearch, setVehicleSearch] = useState('');
   const [vehicleOpen, setVehicleOpen] = useState(false);
 
+  // Bulk outgoing state
+  const [showBulkModal, setShowBulkModal] = useState(false);
+  const [bulkItems, setBulkItems] = useState([]);
+  const [bulkSubmitting, setBulkSubmitting] = useState(false);
+
   const materialRef = useRef(null);
   const vehicleRef = useRef(null);
 
@@ -281,6 +286,125 @@ const Outgoings = ({ currentUser }) => {
     return deduct * (parseFloat(selectedMaterialObj.cost) || 0);
   };
 
+  // ── Helper: build formatted quantity display string ──
+  const buildFormattedQty = (material, dMode, cCount, cCap, cUnit, sQty, bQty, deduction) => {
+    const uType = material.unitType || 'unit';
+    const cName = material.containerName || 'Envase';
+    if (uType === 'liters') {
+      if (dMode === 'container') return `${cCount} ${cName}${parseFloat(cCount) === 1 ? '' : 's'} (${cCap}${cUnit} c/u • ${deduction} L)`;
+      if (dMode === 'sub') return `${sQty} ml (${deduction} L)`;
+      return `${bQty} L`;
+    }
+    if (uType === 'kilos') {
+      if (dMode === 'container') return `${cCount} ${cName}${parseFloat(cCount) === 1 ? '' : 's'} (${cCap}${cUnit} c/u • ${deduction} kg)`;
+      if (dMode === 'sub') return `${sQty} g (${deduction} kg)`;
+      return `${bQty} kg`;
+    }
+    if (uType === 'centimeters') {
+      if (dMode === 'container') return `${cCount} ${cName}${parseFloat(cCount) === 1 ? '' : 's'} (${cCap}${cUnit} c/u • ${deduction} cm)`;
+      if (dMode === 'sub') return `${sQty} cm`;
+      return `${bQty} m (${deduction} cm)`;
+    }
+    if (uType === 'parts') {
+      const mName = material.masterUnitName || 'pliego';
+      if (dMode === 'container') return `${cCount} ${mName}${parseFloat(cCount) === 1 ? '' : 's'} (${deduction} partes)`;
+      return `${deduction} parte${deduction === 1 ? '' : 's'}`;
+    }
+    return `${bQty} pza${parseFloat(bQty) === 1 ? '' : 's'}`;
+  };
+
+  // ── Bulk Outgoing Handlers ──
+  const handleOpenBulk = () => {
+    setEditingOutgoingId(null);
+    setMaterialId('');
+    setMaterialSearch('');
+    setVehicleFolio('');
+    setVehicleSearch('');
+    setTechnicianId('');
+    setDispatchMode('container');
+    setContainerCount(1);
+    setSubQuantity('');
+    setBaseQuantity(1);
+    setCustomContainerCap('');
+    setDate(new Date().toISOString().slice(0, 16));
+    setError('');
+    setSuccess('');
+    setBulkItems([]);
+    setBulkSubmitting(false);
+    setShowBulkModal(true);
+  };
+
+  const getBulkEffectiveStock = (itemId) => {
+    const material = inventory.find(i => i.id === itemId);
+    if (!material) return 0;
+    const committed = bulkItems.filter(bi => bi.materialId === itemId).reduce((s, bi) => s + (bi.stockDeducted || 0), 0);
+    return Math.round(((parseFloat(material.quantity) || 0) - committed) * 1000) / 1000;
+  };
+
+  const handleBulkAddItem = () => {
+    setError('');
+    const deduction = getDeductionAmount();
+    if (!materialId || deduction <= 0) {
+      setError('Selecciona un material y configura una cantidad válida mayor a cero.');
+      return;
+    }
+    const material = inventory.find(i => i.id === materialId);
+    if (!material) { setError('Material seleccionado no válido.'); return; }
+    const availableStock = getBulkEffectiveStock(materialId);
+    if (availableStock < deduction) {
+      const committed = bulkItems.filter(bi => bi.materialId === materialId).reduce((s, bi) => s + (bi.stockDeducted || 0), 0);
+      setError(`Stock insuficiente para "${material.name}". Disponible: ${availableStock}${committed > 0 ? ` (ya comprometiste ${committed} en esta salida)` : ''}.`);
+      return;
+    }
+    const uType = material.unitType || 'unit';
+    const fmtQty = buildFormattedQty(material, dispatchMode, containerCount, customContainerCap, customContainerUnit, subQuantity, baseQuantity, deduction);
+    setBulkItems(prev => [...prev, {
+      materialId, materialName: material.name, unitType: uType,
+      unitSymbol: uType === 'liters' ? 'L' : uType === 'kilos' ? 'kg' : uType === 'centimeters' ? 'cm' : uType === 'parts' ? 'partes' : 'pza',
+      quantity: deduction, quantityFormatted: fmtQty, stockDeducted: deduction,
+      costPerUnit: material.cost, totalCost: deduction * (parseFloat(material.cost) || 0),
+      dispatchMode, containerCount, subQuantity, baseQuantity, customContainerCap, customContainerUnit
+    }]);
+    setMaterialId('');
+    setMaterialSearch('');
+    setDispatchMode('container');
+    setContainerCount(1);
+    setSubQuantity('');
+    setBaseQuantity(1);
+    setCustomContainerCap('');
+  };
+
+  const handleBulkRemoveItem = (index) => {
+    setBulkItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleBulkSubmit = async () => {
+    if (!vehicleFolio || !technicianId || bulkItems.length === 0) {
+      setError('Selecciona vehículo, técnico y agrega al menos un material.');
+      return;
+    }
+    setBulkSubmitting(true);
+    setError('');
+    const tech = technicians.find(u => u.uid === technicianId);
+    try {
+      for (const item of bulkItems) {
+        await registerOutgoing({
+          ...item, technicianId,
+          technicianName: tech ? tech.name : 'Técnico',
+          vehicleFolio, date: new Date(date).toISOString(),
+        });
+      }
+      setSuccess(`✅ ${bulkItems.length} salida${bulkItems.length !== 1 ? 's' : ''} registrada${bulkItems.length !== 1 ? 's' : ''} exitosamente.`);
+      loadAllData();
+      setTimeout(() => { setShowBulkModal(false); setSuccess(''); setBulkItems([]); }, 1800);
+    } catch (err) {
+      setError(`${err.message || 'Error al registrar'}. Algunas salidas pueden haberse registrado parcialmente.`);
+      loadAllData();
+    } finally {
+      setBulkSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
@@ -427,10 +551,16 @@ const Outgoings = ({ currentUser }) => {
           </p>
         </div>
         {isEditable && (
-          <button className="btn btn-primary" onClick={handleOpenAdd}>
-            <Plus size={18} />
-            <span>Registrar Salida</span>
-          </button>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={handleOpenAdd}>
+              <Plus size={18} />
+              <span>Registrar Salida</span>
+            </button>
+            <button className="btn btn-primary" onClick={handleOpenBulk} style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}>
+              <Layers size={18} />
+              <span>Salida Múltiple</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -1122,6 +1252,578 @@ const Outgoings = ({ currentUser }) => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Outgoing Modal */}
+      {showBulkModal && (
+        <div className="modal-overlay">
+          <div className="glass-panel modal-content" style={{ maxWidth: '820px', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Layers size={20} color="#fff" />
+                </div>
+                <div>
+                  <h3 className="modal-title" style={{ margin: 0 }}>Salida Múltiple de Materiales</h3>
+                  <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                    Asigna múltiples materiales a un mismo vehículo y técnico en una sola operación
+                  </p>
+                </div>
+              </div>
+              <button className="modal-close" onClick={() => setShowBulkModal(false)}>✕</button>
+            </div>
+
+            {error && <div className="badge badge-danger" style={{ width: '100%', marginBottom: '1rem', padding: '0.6rem', boxSizing: 'border-box' }}>{error}</div>}
+            {success && <div className="badge badge-success" style={{ width: '100%', marginBottom: '1rem', padding: '0.6rem', boxSizing: 'border-box' }}>{success}</div>}
+
+            {/* ── 1. DATOS GENERALES (Vehículo, Técnico, Fecha) ── */}
+            <div style={{
+              background: 'rgba(255,255,255,0.02)',
+              border: '1px solid var(--panel-border)',
+              borderRadius: '10px',
+              padding: '1rem',
+              marginBottom: '1.25rem'
+            }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>
+                1. Datos del Servicio y Destino
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.85rem' }}>
+                {/* Vehículo Destino */}
+                <div className="form-group" ref={vehicleRef} style={{ position: 'relative', marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.82rem' }}>Vehículo Destino (Activos) *</label>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                      border: '1px solid var(--panel-border)',
+                      borderRadius: '8px',
+                      padding: '0 0.75rem',
+                      cursor: 'text',
+                    }}
+                    onClick={() => setVehicleOpen(true)}
+                  >
+                    <Search size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                    <input
+                      type="text"
+                      placeholder={vehicleFolio ? '' : 'Buscar folio o placa...'}
+                      value={vehicleOpen ? vehicleSearch : (vehicleFolio ? (() => { const v = vehicles.find(v => v.folio === vehicleFolio); return v ? `${v.folio} - ${v.plate} (${v.type})` : vehicleFolio; })() : '')}
+                      onChange={(e) => { setVehicleSearch(e.target.value); setVehicleOpen(true); }}
+                      onFocus={() => { setVehicleSearch(''); setVehicleOpen(true); }}
+                      style={{
+                        flex: 1,
+                        background: 'transparent',
+                        border: 'none',
+                        outline: 'none',
+                        color: 'var(--text-primary)',
+                        fontSize: '0.85rem',
+                        padding: '0.55rem 0',
+                      }}
+                      autoComplete="off"
+                    />
+                    <ChevronDown size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: vehicleOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                  </div>
+
+                  {vehicleOpen && (
+                    <div style={{
+                      position: 'absolute',
+                      top: 'calc(100% + 4px)',
+                      left: 0,
+                      right: 0,
+                      zIndex: 999,
+                      background: 'var(--panel-bg, #1e2535)',
+                      border: '1px solid var(--panel-border)',
+                      borderRadius: '8px',
+                      maxHeight: '220px',
+                      overflowY: 'auto',
+                      boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                    }}>
+                      {vehicleSearch.trim() && (
+                        <div
+                          onClick={() => handleSelectProvisionalSiniestro(vehicleSearch.trim())}
+                          style={{
+                            padding: '0.6rem 0.85rem',
+                            cursor: 'pointer',
+                            background: 'rgba(245, 158, 11, 0.1)',
+                            borderBottom: '1px solid rgba(245, 158, 11, 0.25)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            color: '#fbbf24',
+                            fontSize: '0.8rem',
+                            fontWeight: 600
+                          }}
+                        >
+                          <Plus size={13} />
+                          <span>Usar Siniestro provisional: <strong>{vehicleSearch.trim().toUpperCase()}</strong></span>
+                        </div>
+                      )}
+
+                      {vehicles
+                        .filter(v => {
+                          const q = vehicleSearch.toLowerCase();
+                          return (
+                            (v.folio || '').toLowerCase().includes(q) ||
+                            (v.orderNumber || '').toLowerCase().includes(q) ||
+                            (v.plate || '').toLowerCase().includes(q) ||
+                            (v.brand || '').toLowerCase().includes(q) ||
+                            (v.model || '').toLowerCase().includes(q) ||
+                            (v.type || '').toLowerCase().includes(q)
+                          );
+                        })
+                        .map(v => (
+                          <div
+                            key={v.folio}
+                            onClick={() => {
+                              setVehicleFolio(v.folio);
+                              setVehicleSearch('');
+                              setVehicleOpen(false);
+                            }}
+                            style={{
+                              padding: '0.55rem 0.85rem',
+                              cursor: 'pointer',
+                              borderBottom: '1px solid var(--panel-border)',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              fontSize: '0.82rem',
+                              background: vehicleFolio === v.folio ? 'rgba(99,102,241,0.18)' : 'transparent',
+                            }}
+                            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = vehicleFolio === v.folio ? 'rgba(99,102,241,0.18)' : 'transparent'; }}
+                          >
+                            <span>
+                              {v.orderNumber && <strong style={{ color: '#fbbf24', marginRight: '4px' }}>[{v.orderNumber}]</strong>}
+                              <strong style={{ color: '#a5b4fc' }}>{v.folio}</strong> — {v.plate}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{v.isPendingRegistration ? '⏳ Sin Alta' : v.type}</span>
+                          </div>
+                        ))
+                      }
+                    </div>
+                  )}
+                </div>
+
+                {/* Técnico Solicitante */}
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.82rem' }}>Técnico Solicitante *</label>
+                  <select 
+                    className="select-field" 
+                    value={technicianId} 
+                    onChange={(e) => setTechnicianId(e.target.value)}
+                    style={{ fontSize: '0.85rem', padding: '0.55rem 0.75rem' }}
+                  >
+                    <option value="">-- Selecciona el Técnico --</option>
+                    {technicians.map(t => (
+                      <option key={t.uid} value={t.uid}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Fecha y Hora */}
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <label style={{ fontSize: '0.82rem' }}>Fecha y Hora *</label>
+                  <input 
+                    type="datetime-local" 
+                    className="input-field" 
+                    value={date} 
+                    onChange={(e) => setDate(e.target.value)}
+                    style={{ fontSize: '0.85rem', padding: '0.55rem 0.75rem' }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* ── 2. AGREGAR MATERIALES AL CARRITO ── */}
+            <div style={{
+              background: 'rgba(99, 102, 241, 0.04)',
+              border: '1px solid rgba(99, 102, 241, 0.2)',
+              borderRadius: '10px',
+              padding: '1rem',
+              marginBottom: '1.25rem'
+            }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#818cf8', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.75rem' }}>
+                2. Seleccionar y Agregar Material
+              </div>
+
+              {/* Material Dropdown */}
+              <div className="form-group" ref={materialRef} style={{ position: 'relative' }}>
+                <label style={{ fontSize: '0.82rem' }}>Material o Repuesto *</label>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    background: 'var(--input-bg, rgba(255,255,255,0.05))',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: '8px',
+                    padding: '0 0.75rem',
+                    cursor: 'text',
+                  }}
+                  onClick={() => setMaterialOpen(true)}
+                >
+                  <Search size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0 }} />
+                  <input
+                    type="text"
+                    placeholder={materialId ? '' : 'Buscar repuesto, pintura, aceite o material...'}
+                    value={materialOpen ? materialSearch : (selectedMaterialObj ? `${selectedMaterialObj.code} - ${selectedMaterialObj.name}` : '')}
+                    onChange={(e) => { setMaterialSearch(e.target.value); setMaterialOpen(true); }}
+                    onFocus={() => { setMaterialSearch(''); setMaterialOpen(true); }}
+                    style={{
+                      flex: 1,
+                      background: 'transparent',
+                      border: 'none',
+                      outline: 'none',
+                      color: 'var(--text-primary)',
+                      fontSize: '0.85rem',
+                      padding: '0.55rem 0',
+                    }}
+                    autoComplete="off"
+                  />
+                  <ChevronDown size={14} style={{ color: 'var(--text-secondary)', flexShrink: 0, transform: materialOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                </div>
+
+                {materialOpen && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    left: 0,
+                    right: 0,
+                    zIndex: 999,
+                    background: 'var(--panel-bg, #1e2535)',
+                    border: '1px solid var(--panel-border)',
+                    borderRadius: '8px',
+                    maxHeight: '200px',
+                    overflowY: 'auto',
+                    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
+                  }}>
+                    {inventory
+                      .filter(item =>
+                        `${item.code} ${item.name}`.toLowerCase().includes(materialSearch.toLowerCase())
+                      )
+                      .map(item => {
+                        const effStock = getBulkEffectiveStock(item.id);
+                        const noStock = effStock <= 0;
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => {
+                              if (noStock) return;
+                              handleSelectMaterial(item);
+                            }}
+                            style={{
+                              padding: '0.55rem 0.85rem',
+                              cursor: noStock ? 'not-allowed' : 'pointer',
+                              opacity: noStock ? 0.45 : 1,
+                              borderBottom: '1px solid var(--panel-border)',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              fontSize: '0.82rem',
+                              background: materialId === item.id ? 'rgba(99,102,241,0.18)' : 'transparent',
+                            }}
+                            onMouseEnter={e => { if (!noStock) e.currentTarget.style.background = 'rgba(255,255,255,0.07)'; }}
+                            onMouseLeave={e => { e.currentTarget.style.background = materialId === item.id ? 'rgba(99,102,241,0.18)' : 'transparent'; }}
+                          >
+                            <span><strong style={{ color: '#a5b4fc' }}>{item.code}</strong> — {item.name}</span>
+                            <span style={{ fontSize: '0.75rem', color: noStock ? '#ef4444' : effStock <= parseFloat(item.minStock) ? '#fbbf24' : '#34d399', marginLeft: '0.5rem', flexShrink: 0 }}>
+                              {noStock ? 'SIN STOCK' : `Disp: ${effStock} ${item.unitType === 'liters' ? 'L' : item.unitType === 'kilos' ? 'kg' : item.unitType === 'centimeters' ? 'cm' : item.unitType === 'parts' ? 'partes' : 'pza'}`}
+                            </span>
+                          </div>
+                        );
+                      })
+                    }
+                  </div>
+                )}
+
+                {selectedMaterialObj && (
+                  <span style={{ fontSize: '0.78rem', color: getBulkEffectiveStock(selectedMaterialObj.id) <= parseFloat(selectedMaterialObj.minStock) ? '#fbbf24' : '#94a3b8', marginTop: '4px', display: 'block' }}>
+                    Stock disponible real: <strong>{getBulkEffectiveStock(selectedMaterialObj.id)} {selectedMaterialObj.unitType === 'liters' ? 'L' : selectedMaterialObj.unitType === 'kilos' ? 'kg' : selectedMaterialObj.unitType === 'centimeters' ? 'cm' : selectedMaterialObj.unitType === 'parts' ? 'partes' : 'pza'}</strong> | Costo base: ${(parseFloat(selectedMaterialObj.cost) || 0).toFixed(2)}
+                  </span>
+                )}
+              </div>
+
+              {/* Quantity config for non-unit materials */}
+              {selectedMaterialObj && selectedMaterialObj.unitType !== 'unit' && (
+                <div style={{ background: 'rgba(0,0,0,0.2)', border: '1px solid var(--panel-border)', borderRadius: '8px', padding: '0.75rem', marginBottom: '0.75rem' }}>
+                  <div style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.6rem', flexWrap: 'wrap' }}>
+                    {selectedMaterialObj.unitType === 'liters' && (
+                      <>
+                        <button type="button" onClick={() => setDispatchMode('container')} className={`btn btn-sm ${dispatchMode === 'container' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          🍶 Envases ({customContainerCap} {customContainerUnit})
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('sub')} className={`btn btn-sm ${dispatchMode === 'sub' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          🧪 Mililitros (ml)
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('base')} className={`btn btn-sm ${dispatchMode === 'base' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          🛢️ Litros (L)
+                        </button>
+                      </>
+                    )}
+                    {selectedMaterialObj.unitType === 'kilos' && (
+                      <>
+                        <button type="button" onClick={() => setDispatchMode('container')} className={`btn btn-sm ${dispatchMode === 'container' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          🥫 Envases ({customContainerCap} {customContainerUnit})
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('sub')} className={`btn btn-sm ${dispatchMode === 'sub' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          ⚖️ Gramos (g)
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('base')} className={`btn btn-sm ${dispatchMode === 'base' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          📦 Kilos (kg)
+                        </button>
+                      </>
+                    )}
+                    {selectedMaterialObj.unitType === 'centimeters' && (
+                      <>
+                        <button type="button" onClick={() => setDispatchMode('container')} className={`btn btn-sm ${dispatchMode === 'container' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          🌀 Rollos ({customContainerCap} {customContainerUnit})
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('sub')} className={`btn btn-sm ${dispatchMode === 'sub' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          📏 Centímetros (cm)
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('base')} className={`btn btn-sm ${dispatchMode === 'base' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem', minWidth: '110px' }}>
+                          📐 Metros (m)
+                        </button>
+                      </>
+                    )}
+                    {selectedMaterialObj.unitType === 'parts' && (
+                      <>
+                        <button type="button" onClick={() => setDispatchMode('sub')} className={`btn btn-sm ${dispatchMode === 'sub' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem' }}>
+                          ✂️ Partes Fraccionadas
+                        </button>
+                        <button type="button" onClick={() => setDispatchMode('container')} className={`btn btn-sm ${dispatchMode === 'container' ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, fontSize: '0.78rem' }}>
+                          📄 {selectedMaterialObj.masterUnitName || 'Pliego'} Completo ({selectedMaterialObj.partsPerUnit || 4} partes)
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {dispatchMode === 'container' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.5rem' }}>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label style={{ fontSize: '0.78rem' }}>Cant. Envases</label>
+                        <input type="number" step="any" className="input-field" value={containerCount} onChange={(e) => setContainerCount(e.target.value)} min={0.1} placeholder="1" style={{ padding: '0.45rem 0.6rem', fontSize: '0.85rem' }} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label style={{ fontSize: '0.78rem' }}>Capacidad</label>
+                        <input type="number" step="any" className="input-field" value={customContainerCap} onChange={(e) => setCustomContainerCap(e.target.value)} min={0.001} placeholder="ej. 750" style={{ padding: '0.45rem 0.6rem', fontSize: '0.85rem' }} />
+                      </div>
+                      <div className="form-group" style={{ marginBottom: 0 }}>
+                        <label style={{ fontSize: '0.78rem' }}>Unidad</label>
+                        <select className="select-field" value={customContainerUnit} onChange={(e) => setCustomContainerUnit(e.target.value)} style={{ padding: '0.45rem 0.6rem', fontSize: '0.85rem' }}>
+                          {selectedMaterialObj.unitType === 'liters' && (<><option value="ml">ml</option><option value="L">L</option></>)}
+                          {selectedMaterialObj.unitType === 'kilos' && (<><option value="g">g</option><option value="kg">kg</option></>)}
+                          {selectedMaterialObj.unitType === 'centimeters' && (<><option value="m">m</option><option value="cm">cm</option></>)}
+                          {selectedMaterialObj.unitType === 'parts' && (<option value="partes">partes</option>)}
+                        </select>
+                      </div>
+                    </div>
+                  )}
+
+                  {dispatchMode === 'sub' && (
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label style={{ fontSize: '0.78rem' }}>Cantidad en {selectedMaterialObj.unitType === 'liters' ? 'Mililitros (ml)' : selectedMaterialObj.unitType === 'kilos' ? 'Gramos (g)' : selectedMaterialObj.unitType === 'centimeters' ? 'Centímetros (cm)' : 'Partes'}</label>
+                      <input type="number" step="any" className="input-field" value={subQuantity} onChange={(e) => setSubQuantity(e.target.value)} min={selectedMaterialObj.unitType === 'parts' ? 1 : 0.1} placeholder={selectedMaterialObj.unitType === 'liters' ? 'ej. 750, 500' : 'ej. 250'} style={{ padding: '0.45rem 0.6rem', fontSize: '0.85rem' }} />
+                    </div>
+                  )}
+
+                  {dispatchMode === 'base' && (
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label style={{ fontSize: '0.78rem' }}>Cantidad en {selectedMaterialObj.unitType === 'liters' ? 'Litros (L)' : selectedMaterialObj.unitType === 'kilos' ? 'Kilos (kg)' : 'Metros (m)'}</label>
+                      <input type="number" step="any" className="input-field" value={baseQuantity} onChange={(e) => setBaseQuantity(e.target.value)} min={0.001} placeholder="ej. 1.5" style={{ padding: '0.45rem 0.6rem', fontSize: '0.85rem' }} />
+                    </div>
+                  )}
+
+                  <div style={{ fontSize: '0.75rem', color: '#34d399', marginTop: '4px' }}>
+                    ↳ Descontará de stock: <strong>{getDeductionAmount()} {selectedMaterialObj.unitType === 'liters' ? 'L' : selectedMaterialObj.unitType === 'kilos' ? 'kg' : selectedMaterialObj.unitType === 'centimeters' ? 'cm' : 'partes'}</strong> (${calculateSubtotal().toFixed(2)} + IVA)
+                  </div>
+                </div>
+              )}
+
+              {/* Regular unit item quantity */}
+              {selectedMaterialObj && selectedMaterialObj.unitType === 'unit' && (
+                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
+                  <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
+                    <label style={{ fontSize: '0.78rem' }}>Cantidad de Piezas</label>
+                    <input type="number" step="any" className="input-field" value={baseQuantity} onChange={(e) => setBaseQuantity(e.target.value)} min={0.1} placeholder="1" style={{ padding: '0.45rem 0.6rem', fontSize: '0.85rem' }} />
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#34d399', paddingBottom: '0.5rem' }}>
+                    Subtotal: <strong>${calculateSubtotal().toFixed(2)}</strong>
+                  </div>
+                </div>
+              )}
+
+              {/* Botón Agregar al Carrito */}
+              <button
+                type="button"
+                onClick={handleBulkAddItem}
+                disabled={!selectedMaterialObj || getDeductionAmount() <= 0}
+                className="btn btn-primary"
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '0.5rem',
+                  padding: '0.6rem',
+                  fontSize: '0.85rem',
+                  background: !selectedMaterialObj || getDeductionAmount() <= 0 ? 'rgba(255,255,255,0.05)' : 'linear-gradient(135deg, #4f46e5, #7c3aed)',
+                }}
+              >
+                <Plus size={16} />
+                Agregar Material a la Lista
+              </button>
+            </div>
+
+            {/* ── 3. LISTA DE MATERIALES AGREGADOS (CARRITO) ── */}
+            <div style={{ marginBottom: '1.25rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#a5b4fc', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  3. Materiales en esta Salida ({bulkItems.length})
+                </span>
+                {bulkItems.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setBulkItems([])}
+                    style={{ background: 'none', border: 'none', color: '#ef4444', fontSize: '0.75rem', cursor: 'pointer', textDecoration: 'underline' }}
+                  >
+                    Vaciar lista
+                  </button>
+                )}
+              </div>
+
+              {bulkItems.length === 0 ? (
+                <div style={{
+                  padding: '1.5rem',
+                  textAlign: 'center',
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px dashed var(--panel-border)',
+                  borderRadius: '8px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '0.85rem'
+                }}>
+                  <Layers size={28} style={{ opacity: 0.3, marginBottom: '0.35rem', display: 'block', margin: '0 auto' }} />
+                  Aún no has agregado materiales. Selecciona un material arriba y pulsa "Agregar Material a la Lista".
+                </div>
+              ) : (
+                <div style={{ border: '1px solid var(--panel-border)', borderRadius: '8px', overflow: 'hidden' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(255,255,255,0.04)', borderBottom: '1px solid var(--panel-border)', color: 'var(--text-secondary)', textAlign: 'left' }}>
+                        <th style={{ padding: '0.55rem 0.75rem' }}>#</th>
+                        <th style={{ padding: '0.55rem 0.75rem' }}>Material</th>
+                        <th style={{ padding: '0.55rem 0.75rem' }}>Cantidad Entregada</th>
+                        <th style={{ padding: '0.55rem 0.75rem' }}>Stock a Deducir</th>
+                        <th style={{ padding: '0.55rem 0.75rem', textAlign: 'right' }}>Costo Total</th>
+                        <th style={{ padding: '0.55rem 0.75rem', textAlign: 'center', width: '40px' }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bulkItems.map((bi, idx) => (
+                        <tr key={idx} style={{ borderBottom: idx < bulkItems.length - 1 ? '1px solid var(--panel-border)' : 'none', background: idx % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.015)' }}>
+                          <td style={{ padding: '0.55rem 0.75rem', color: 'var(--text-secondary)' }}>{idx + 1}</td>
+                          <td style={{ padding: '0.55rem 0.75rem', fontWeight: 600, color: 'var(--text-primary)' }}>{bi.materialName}</td>
+                          <td style={{ padding: '0.55rem 0.75rem' }}>
+                            <span className="badge badge-info" style={{ fontSize: '0.75rem' }}>{bi.quantityFormatted}</span>
+                          </td>
+                          <td style={{ padding: '0.55rem 0.75rem', color: '#a5b4fc', fontWeight: 600 }}>
+                            {bi.stockDeducted} {bi.unitSymbol}
+                          </td>
+                          <td style={{ padding: '0.55rem 0.75rem', textAlign: 'right', fontWeight: 600 }}>
+                            ${(bi.totalCost || 0).toFixed(2)}
+                          </td>
+                          <td style={{ padding: '0.55rem 0.75rem', textAlign: 'center' }}>
+                            <button
+                              type="button"
+                              onClick={() => handleBulkRemoveItem(idx)}
+                              className="btn btn-danger btn-sm"
+                              style={{ padding: '0.25rem', lineHeight: 1 }}
+                              title="Quitar de la lista"
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* ── 4. RESUMEN DE COSTOS ── */}
+            {bulkItems.length > 0 && (() => {
+              const bulkSubtotal = bulkItems.reduce((s, bi) => s + (bi.totalCost || 0), 0);
+              const bulkIva = bulkSubtotal * 0.16;
+              const bulkTotal = bulkSubtotal + bulkIva;
+              return (
+                <div style={{
+                  padding: '0.85rem 1rem',
+                  borderRadius: '8px',
+                  background: 'rgba(255,255,255,0.02)',
+                  border: '1px solid var(--panel-border)',
+                  fontSize: '0.85rem',
+                  marginBottom: '1rem'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>
+                    <span>Total de materiales:</span>
+                    <strong style={{ color: 'var(--text-primary)' }}>{bulkItems.length} partida{bulkItems.length !== 1 ? 's' : ''}</strong>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
+                    <span>Subtotal (Sin IVA):</span>
+                    <span>${bulkSubtotal.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.25rem', color: 'var(--text-secondary)' }}>
+                    <span>IVA (16%):</span>
+                    <span>${bulkIva.toFixed(2)}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', color: '#34d399', borderTop: '1px solid var(--panel-border)', paddingTop: '0.35rem', marginTop: '0.35rem', fontSize: '0.95rem' }}>
+                    <span>Total General (Con IVA):</span>
+                    <span>${bulkTotal.toFixed(2)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* ── 5. FOOTER / ACCIONES ── */}
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => setShowBulkModal(false)}
+                disabled={bulkSubmitting}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkSubmit}
+                className="btn btn-primary"
+                disabled={bulkItems.length === 0 || !vehicleFolio || !technicianId || bulkSubmitting}
+                style={{
+                  background: bulkItems.length === 0 || !vehicleFolio || !technicianId || bulkSubmitting
+                    ? undefined
+                    : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                {bulkSubmitting ? (
+                  <>Registrando salidas...</>
+                ) : (
+                  <>
+                    <Layers size={16} />
+                    Registrar {bulkItems.length} Salida{bulkItems.length !== 1 ? 's' : ''}
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}
