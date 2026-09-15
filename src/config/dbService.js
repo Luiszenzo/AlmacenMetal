@@ -6,6 +6,12 @@ import {
   sanitizeInput,
   validateFieldSize
 } from "./security";
+import {
+  saveInvoicePdf,
+  getInvoicePdf,
+  getAllInvoicePdfsMap,
+  deleteInvoicePdf
+} from "../utils/idbStorage";
 import { initializeApp } from "firebase/app";
 import { 
   collection, 
@@ -47,7 +53,7 @@ export const subscribeToCollection = (collectionName, callback) => {
 // Helper to check if Firebase is connected / ready (runs check on firestore)
 export let useLocalFallback = localStorage.getItem("workshop_use_local_fallback") === "true";
 
-// Clear legacy mock seed data from LocalStorage if present (one-time cleanup)
+// Clear legacy mock seed data and sanitize bloated base64 from LocalStorage
 const cleanLegacySeedData = () => {
   // Remove mock vehicles seeded in older versions
   const localV = localStorage.getItem("workshop_vehicles");
@@ -68,6 +74,25 @@ const cleanLegacySeedData = () => {
   const localO = localStorage.getItem("workshop_outgoings");
   if (localO && localO.includes("out1")) {
     localStorage.removeItem("workshop_outgoings");
+  }
+
+  // Migrate bloated invoice PDFs from localStorage to IndexedDB and sanitize localStorage
+  const localInv = localStorage.getItem("workshop_invoices");
+  if (localInv && localInv.includes("data:application/pdf")) {
+    try {
+      const parsed = JSON.parse(localInv);
+      const light = parsed.map(inv => {
+        if (inv.pdfUrl && inv.pdfUrl.startsWith("data:")) {
+          saveInvoicePdf(inv.id, inv.pdfUrl, inv.pdfName);
+          const { pdfUrl, ...rest } = inv;
+          return { ...rest, hasPdf: true };
+        }
+        return inv;
+      });
+      localStorage.setItem("workshop_invoices", JSON.stringify(light));
+    } catch (e) {
+      console.warn("Could not sanitize workshop_invoices in localStorage:", e);
+    }
   }
 };
 cleanLegacySeedData();
@@ -1297,6 +1322,20 @@ export const addVehicleComment = async (commentData) => {
 // --- INVOICES SERVICES (GESTIÓN DE FACTURAS EMITIDAS) ---
 
 export const getInvoicesList = async () => {
+  // Cargar mapa de PDFs desde IndexedDB
+  const localPdfsMap = await getAllInvoicePdfsMap();
+
+  if (useLocalFallback) {
+    const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+    const merged = local.map(inv => {
+      const storedPdf = localPdfsMap[inv.id];
+      if (storedPdf) {
+        return { ...inv, pdfUrl: storedPdf.pdfUrl, pdfName: storedPdf.pdfName || inv.pdfName };
+      }
+      return inv;
+    });
+    return merged.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+  }
   try {
     const snapshot = await getDocs(collection(db, "invoices"));
     const list = [];
@@ -1310,6 +1349,8 @@ export const getInvoicesList = async () => {
         const data = d.data();
         if (data.invoiceId && data.pdfUrl) {
           docsMap[data.invoiceId] = { pdfUrl: data.pdfUrl, pdfName: data.pdfName };
+          // Guardar también en IndexedDB para disponibilidad offline
+          saveInvoicePdf(data.invoiceId, data.pdfUrl, data.pdfName);
         }
       });
 
@@ -1317,14 +1358,32 @@ export const getInvoicesList = async () => {
         if (docsMap[inv.id]) {
           inv.pdfUrl = docsMap[inv.id].pdfUrl;
           if (docsMap[inv.id].pdfName) inv.pdfName = docsMap[inv.id].pdfName;
+        } else if (localPdfsMap[inv.id]) {
+          inv.pdfUrl = localPdfsMap[inv.id].pdfUrl;
+          if (localPdfsMap[inv.id].pdfName) inv.pdfName = localPdfsMap[inv.id].pdfName;
         }
       });
     } catch (docsErr) {
       console.warn("Error fetching invoice docs:", docsErr);
+      list.forEach(inv => {
+        if (localPdfsMap[inv.id]) {
+          inv.pdfUrl = localPdfsMap[inv.id].pdfUrl;
+          if (localPdfsMap[inv.id].pdfName) inv.pdfName = localPdfsMap[inv.id].pdfName;
+        }
+      });
     }
 
-    // Keep local storage mirror in sync
-    localStorage.setItem("workshop_invoices", JSON.stringify(list));
+    // Keep local storage mirror in sync (eliminando base64 pesado para no exceder cuota de 5MB)
+    try {
+      const lightList = list.map(inv => {
+        const { pdfUrl, ...rest } = inv;
+        return rest;
+      });
+      localStorage.setItem("workshop_invoices", JSON.stringify(lightList));
+    } catch (lsErr) {
+      console.warn("Could not sync invoices to localStorage:", lsErr);
+    }
+    
     return list.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
   } catch (e) {
     if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
@@ -1333,7 +1392,14 @@ export const getInvoicesList = async () => {
       console.warn("Firestore getInvoicesList (usando fallback local):", e?.message || e);
     }
     const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
-    return local.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+    const merged = local.map(inv => {
+      const storedPdf = localPdfsMap[inv.id];
+      if (storedPdf) {
+        return { ...inv, pdfUrl: storedPdf.pdfUrl, pdfName: storedPdf.pdfName || inv.pdfName };
+      }
+      return inv;
+    });
+    return merged.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
   }
 };
 
@@ -1359,8 +1425,8 @@ export const saveInvoice = async (invoiceData) => {
     issueDate: metaPayload.issueDate || new Date().toISOString().slice(0, 10),
     paymentDate: metaPayload.paymentDate || null,
     notes: metaPayload.notes || '',
-    hasPdf: !!pdfUrl,
-    pdfName: pdfName || (pdfUrl ? `Factura_${metaPayload.invoiceFolio || invoiceId}.pdf` : ''),
+    hasPdf: !!pdfUrl || !!metaPayload.hasPdf,
+    pdfName: pdfName || (pdfUrl ? `Factura_${metaPayload.invoiceFolio || invoiceId}.pdf` : (metaPayload.pdfName || '')),
     updatedAt: new Date().toISOString()
   };
 
@@ -1368,23 +1434,36 @@ export const saveInvoice = async (invoiceData) => {
     invoiceRecord.createdAt = new Date().toISOString();
   }
 
-  // 1. Guardar en LocalStorage (incluye PDF para funcionamiento offline)
-  const localList = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
-  const localIndex = localList.findIndex(i => i.id === invoiceId);
-  const fullLocalRecord = { ...invoiceRecord, pdfUrl: pdfUrl || (localIndex !== -1 ? localList[localIndex].pdfUrl : '') };
-  
-  if (localIndex !== -1) {
-    localList[localIndex] = fullLocalRecord;
-  } else {
-    localList.unshift(fullLocalRecord);
+  // 1. Guardar PDF en IndexedDB si existe (sin límite de 5MB)
+  if (pdfUrl) {
+    await saveInvoicePdf(invoiceId, pdfUrl, invoiceRecord.pdfName);
   }
-  localStorage.setItem("workshop_invoices", JSON.stringify(localList));
+
+  // 2. Guardar metadata liviana en LocalStorage (sin incluir base64 pesado)
+  try {
+    const localList = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+    const localIndex = localList.findIndex(i => i.id === invoiceId);
+    const lightRecord = { ...invoiceRecord };
+    delete lightRecord.pdfUrl;
+    
+    if (localIndex !== -1) {
+      localList[localIndex] = lightRecord;
+    } else {
+      localList.unshift(lightRecord);
+    }
+    localStorage.setItem("workshop_invoices", JSON.stringify(localList));
+  } catch (lsErr) {
+    console.warn("Could not save invoice metadata to localStorage:", lsErr);
+  }
+
+  const fullReturnRecord = { ...invoiceRecord, pdfUrl: pdfUrl || '' };
 
   if (useLocalFallback) {
-    return fullLocalRecord;
+    notifyDataChanged();
+    return fullReturnRecord;
   }
 
-  // 2. Guardar en Firestore
+  // 3. Guardar en Firestore
   try {
     // Guardar metadata en `invoices`
     await setDoc(doc(db, "invoices", invoiceId), invoiceRecord, { merge: true });
@@ -1400,10 +1479,12 @@ export const saveInvoice = async (invoiceData) => {
       });
     }
 
-    return fullLocalRecord;
+    notifyDataChanged();
+    return fullReturnRecord;
   } catch (e) {
     console.error("Firestore saveInvoice error:", e);
-    return fullLocalRecord;
+    notifyDataChanged();
+    return fullReturnRecord;
   }
 };
 
@@ -1415,9 +1496,14 @@ export const deleteInvoice = async (invoiceId) => {
     targetFolio = targetInv.vehicleFolio || targetInv.reportNumber;
   }
 
-  // 1. Eliminar de LocalStorage
+  // 1. Eliminar de LocalStorage e IndexedDB
   const filtered = localList.filter(i => i.id !== invoiceId);
-  localStorage.setItem("workshop_invoices", JSON.stringify(filtered));
+  try {
+    localStorage.setItem("workshop_invoices", JSON.stringify(filtered));
+  } catch (lsErr) {
+    console.warn("Error updating localStorage on deleteInvoice:", lsErr);
+  }
+  await deleteInvoicePdf(invoiceId);
 
   if (useLocalFallback) {
     if (targetFolio) {
