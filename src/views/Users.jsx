@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Users as UsersIcon, Plus, Eye, EyeOff } from 'lucide-react';
 import { getUsersList, createNewUser, toggleUserActiveStatus, subscribeToCollection } from '../config/dbService';
+import { TableSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 
 const Users = ({ currentUser }) => {
   const [users, setUsers] = useState([]);
@@ -16,7 +17,7 @@ const Users = ({ currentUser }) => {
   const loadUsers = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const data = await getUsersList();
+      const data = await getUsersList(isSilent);
       setUsers(data);
     } catch (err) {
       console.error(err);
@@ -94,8 +95,8 @@ const Users = ({ currentUser }) => {
       </div>
 
       {loading ? (
-        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
-          Cargando usuarios...
+        <div className="glass-panel" style={{ padding: '1rem', overflow: 'hidden' }}>
+          <TableSkeleton rows={5} columns={5} />
         </div>
       ) : (
         <div className="glass-panel table-container">

@@ -36,14 +36,62 @@ import {
   getAuth
 } from "firebase/auth";
 
+// --- In-Memory Fast TTL Cache & In-Flight Promise Deduplication ---
+const memoryCache = new Map();
+const inFlightRequests = new Map();
+const CACHE_TTL_MS = 25_000; // 25 seconds TTL for instant module navigation
+
+export const invalidateCache = (keys = []) => {
+  if (!keys || keys.length === 0) {
+    memoryCache.clear();
+  } else {
+    keys.forEach(k => {
+      if (typeof k === 'string') {
+        memoryCache.delete(k);
+        // also delete any sub-keys starting with prefix
+        for (const existingKey of memoryCache.keys()) {
+          if (existingKey.startsWith(k)) memoryCache.delete(existingKey);
+        }
+      }
+    });
+  }
+};
+
+export const getOrFetchCached = async (cacheKey, fetcher, ttlMs = CACHE_TTL_MS, forceRefresh = false) => {
+  if (!forceRefresh && memoryCache.has(cacheKey)) {
+    const cached = memoryCache.get(cacheKey);
+    if (Date.now() - cached.timestamp < ttlMs) {
+      return cached.data;
+    }
+  }
+
+  if (inFlightRequests.has(cacheKey)) {
+    return inFlightRequests.get(cacheKey);
+  }
+
+  const promise = (async () => {
+    try {
+      const data = await fetcher();
+      memoryCache.set(cacheKey, { data, timestamp: Date.now() });
+      return data;
+    } finally {
+      inFlightRequests.delete(cacheKey);
+    }
+  })();
+
+  inFlightRequests.set(cacheKey, promise);
+  return promise;
+};
+
 // Helper to notify all active views of local/cloud data changes
-export const notifyDataChanged = () => {
+export const notifyDataChanged = (keysToInvalidate) => {
+  invalidateCache(keysToInvalidate);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('workshop_data_changed'));
   }
 };
 
-// Generic Subscription Helper (Disabled Firestore onSnapshot to save Firebase reads quota)
+// Generic Subscription Helper
 export const subscribeToCollection = (collectionName, callback) => {
   const handleLocal = () => callback(null);
   window.addEventListener('workshop_data_changed', handleLocal);
@@ -227,22 +275,23 @@ export const logoutUser = async () => {
 
 // --- USER MANAGEMENT ---
 
-export const getUsersList = async () => {
-  if (useLocalFallback) {
-    return JSON.parse(localStorage.getItem("workshop_users") || "[]");
-  }
-  try {
-    const querySnapshot = await getDocs(collection(db, "users"));
-    const users = [];
-    querySnapshot.forEach((doc) => {
-      users.push({ id: doc.id, ...doc.data() });
-    });
-    // Si Firestore está vacío, retornar lista vacía (sin datos semilla)
-    return users;
-  } catch (e) {
-    useLocalFallback = true;
-    return getUsersList();
-  }
+export const getUsersList = async (forceRefresh = false) => {
+  return getOrFetchCached('users_list', async () => {
+    if (useLocalFallback) {
+      return JSON.parse(localStorage.getItem("workshop_users") || "[]");
+    }
+    try {
+      const querySnapshot = await getDocs(collection(db, "users"));
+      const users = [];
+      querySnapshot.forEach((doc) => {
+        users.push({ id: doc.id, ...doc.data() });
+      });
+      return users;
+    } catch (e) {
+      useLocalFallback = true;
+      return JSON.parse(localStorage.getItem("workshop_users") || "[]");
+    }
+  }, CACHE_TTL_MS, forceRefresh);
 };
 
 export const createNewUser = async (name, email, password, role) => {
@@ -255,6 +304,7 @@ export const createNewUser = async (name, email, password, role) => {
     const newUser = { uid: "local_" + Date.now(), email: email || null, name, role, password: password || null, active: true };
     localUsers.push(newUser);
     localStorage.setItem("workshop_users", JSON.stringify(localUsers));
+    notifyDataChanged(['users_list']);
     console.log("💾 [DB SERVICE] Usuario guardado localmente con éxito:", newUser);
     return newUser;
   }
@@ -266,6 +316,7 @@ export const createNewUser = async (name, email, password, role) => {
       const uid = "tecnico_" + Date.now();
       const newUser = { uid, email: null, name, role, active: true };
       await setDoc(doc(db, "users", uid), newUser);
+      notifyDataChanged(['users_list']);
       console.log("☁️ [DB SERVICE] Técnico registrado con éxito en Firestore:", newUser);
       return newUser;
     } catch (e) {
@@ -300,6 +351,7 @@ export const createNewUser = async (name, email, password, role) => {
     // Limpiar la app secundaria
     await deleteApp(secondaryApp).catch(() => {});
     
+    notifyDataChanged(['users_list']);
     console.log("☁️ [DB SERVICE] Usuario creado con éxito en Firebase Nube:", newUser);
     return newUser;
   } catch (e) {
@@ -316,51 +368,56 @@ export const toggleUserActiveStatus = async (uid, currentStatus) => {
     const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
     const updated = localUsers.map(u => u.uid === uid ? { ...u, active: !currentStatus } : u);
     localStorage.setItem("workshop_users", JSON.stringify(updated));
+    notifyDataChanged(['users_list']);
     return;
   }
   try {
     await updateDoc(doc(db, "users", uid), { active: !currentStatus });
+    notifyDataChanged(['users_list']);
   } catch (e) {
     console.error("Firestore user update error:", e);
     const localUsers = JSON.parse(localStorage.getItem("workshop_users") || "[]");
     const updated = localUsers.map(u => u.uid === uid ? { ...u, active: !currentStatus } : u);
     localStorage.setItem("workshop_users", JSON.stringify(updated));
+    notifyDataChanged(['users_list']);
   }
 };
 
 
 // --- INVENTORY SERVICES ---
 
-export const getInventoryList = async () => {
-  try {
-    const querySnapshot = await getDocs(collection(db, "inventory"));
-    const items = [];
-    querySnapshot.forEach((doc) => {
-      items.push({ id: doc.id, ...doc.data() });
-    });
-
-    // Merge & sync local cache
+export const getInventoryList = async (forceRefresh = false) => {
+  return getOrFetchCached('inventory_list', async () => {
     try {
-      const local = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
-      const cloudIds = new Set(items.map(i => i.id));
-      local.forEach(li => {
-        if (li.id && !cloudIds.has(li.id)) items.push(li);
+      const querySnapshot = await getDocs(collection(db, "inventory"));
+      const items = [];
+      querySnapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() });
       });
-      localStorage.setItem("workshop_inventory", JSON.stringify(items));
-    } catch (syncErr) {
-      console.warn("Could not sync inventory to local cache:", syncErr);
-    }
 
-    return items;
-  } catch (e) {
-    if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
-      console.warn("Firestore getInventoryList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
-    } else {
-      console.error("Firestore getInventoryList error:", e);
+      // Merge & sync local cache
+      try {
+        const local = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
+        const cloudIds = new Set(items.map(i => i.id));
+        local.forEach(li => {
+          if (li.id && !cloudIds.has(li.id)) items.push(li);
+        });
+        localStorage.setItem("workshop_inventory", JSON.stringify(items));
+      } catch (syncErr) {
+        console.warn("Could not sync inventory to local cache:", syncErr);
+      }
+
+      return items;
+    } catch (e) {
+      if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
+        console.warn("Firestore getInventoryList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
+      } else {
+        console.error("Firestore getInventoryList error:", e);
+      }
+      useLocalFallback = true;
+      return JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
     }
-    useLocalFallback = true;
-    return JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
-  }
+  }, CACHE_TTL_MS, forceRefresh);
 };
 
 export const saveInventoryItem = async (item) => {
@@ -379,6 +436,7 @@ export const saveInventoryItem = async (item) => {
       items.push(newItem);
       localStorage.setItem("workshop_inventory", JSON.stringify(items));
     }
+    notifyDataChanged(['inventory_list']);
     return;
   }
   try {
@@ -388,6 +446,7 @@ export const saveInventoryItem = async (item) => {
       const docRef = await addDoc(collection(db, "inventory"), item);
       await updateDoc(docRef, { id: docRef.id });
     }
+    notifyDataChanged(['inventory_list']);
   } catch (e) {
     console.error("Firestore saveInventoryItem error:", e);
     useLocalFallback = true;
@@ -400,10 +459,12 @@ export const removeInventoryItem = async (id) => {
     const items = JSON.parse(localStorage.getItem("workshop_inventory") || "[]");
     const filtered = items.filter(i => i.id !== id);
     localStorage.setItem("workshop_inventory", JSON.stringify(filtered));
+    notifyDataChanged(['inventory_list']);
     return;
   }
   try {
     await deleteDoc(doc(db, "inventory", id));
+    notifyDataChanged(['inventory_list']);
   } catch (e) {
     console.error("Firestore removeInventoryItem error:", e);
     useLocalFallback = true;
@@ -414,103 +475,129 @@ export const removeInventoryItem = async (id) => {
 
 // --- VEHICLES SERVICES ---
 
-export const getVehiclesList = async () => {
-  try {
-    const snapshot = await getDocs(collection(db, "vehicles"));
-    useLocalFallback = false;
-    const list = [];
-    snapshot.forEach(d => list.push({ id: d.id, folio: d.id, ...d.data() }));
-
-    // Fetch photos and heavy docs from separate collections in parallel
+export const getVehiclesList = async (forceRefresh = false) => {
+  return getOrFetchCached('vehicles_list', async () => {
     try {
-      const [photosSnap, docsSnap] = await Promise.all([
-        getDocs(collection(db, "vehicle_photos")),
-        getDocs(collection(db, "vehicle_docs"))
+      const snapshot = await getDocs(collection(db, "vehicles"));
+      useLocalFallback = false;
+      const list = [];
+      snapshot.forEach(d => {
+        const data = d.data();
+        const mainPhoto = data.primaryPhoto || (data.imageUrls && data.imageUrls[0]) || '';
+        const initialImages = (data.imageUrls && data.imageUrls.length > 0) ? data.imageUrls : (mainPhoto ? [mainPhoto] : []);
+        list.push({ 
+          id: d.id, 
+          folio: d.id, 
+          ...data,
+          primaryPhoto: mainPhoto,
+          imageUrls: initialImages
+        });
+      });
+
+      // Sync and merge with localStorage cache for fallback operations
+      try {
+        const localList = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+        const localMap = new Map(localList.map(lv => [lv.folio, lv]));
+
+        // Merge local parts & fields into cloud list
+        list.forEach(v => {
+          const lv = localMap.get(v.folio);
+          if (lv) {
+            const deletedIds = new Set(lv.deletedPartIds || []);
+            const cloudParts = (v.orderedParts || []).filter(p => !deletedIds.has(p.id));
+
+            if (lv.orderedParts && lv.orderedParts.length > 0) {
+              const partMap = new Map();
+              cloudParts.forEach(p => { if (p.id) partMap.set(p.id, p); });
+              lv.orderedParts.forEach(p => {
+                if (p.id && !deletedIds.has(p.id)) {
+                  partMap.set(p.id, { ...partMap.get(p.id), ...p });
+                }
+              });
+              v.orderedParts = Array.from(partMap.values());
+            } else {
+              v.orderedParts = cloudParts;
+            }
+          }
+        });
+
+        // Include local-only vehicles if any
+        const cloudFolios = new Set(list.map(v => v.folio));
+        localList.forEach(lv => {
+          if (lv.folio && !cloudFolios.has(lv.folio)) {
+            list.push(lv);
+          }
+        });
+
+        // Strip heavy base64 data to avoid exceeding localStorage quota
+        const lightList = list.map(v => {
+          const { imageUrls, admissionPassUrl, inventoryDocUrl, primaryPhoto, ...rest } = v;
+          return rest;
+        });
+        localStorage.setItem("workshop_vehicles", JSON.stringify(lightList));
+      } catch (syncErr) {
+        console.warn("Could not sync vehicles to localStorage:", syncErr);
+      }
+
+      return list;
+    } catch (e) {
+      console.error("Firestore getVehiclesList error:", e);
+      const local = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+      return local.filter(v => v.folio !== "V-1001" && v.folio !== "V-1002" && v.folio !== "V-1003");
+    }
+  }, CACHE_TTL_MS, forceRefresh);
+};
+
+/**
+ * Loads heavy media (all photos, admission pass, inventory doc) on-demand for a single vehicle.
+ */
+export const getVehicleFullMedia = async (vehicleFolio) => {
+  if (!vehicleFolio) return { imageUrls: [], admissionPassUrl: '', inventoryDocUrl: '' };
+  const cacheKey = `vehicle_media_${vehicleFolio}`;
+  return getOrFetchCached(cacheKey, async () => {
+    if (useLocalFallback) {
+      const localList = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
+      const matched = localList.find(v => v.folio === vehicleFolio);
+      return {
+        imageUrls: matched?.imageUrls || [],
+        admissionPassUrl: matched?.admissionPassUrl || '',
+        inventoryDocUrl: matched?.inventoryDocUrl || ''
+      };
+    }
+    try {
+      const [photosSnap, admissionSnap, inventorySnap] = await Promise.all([
+        getDocs(query(collection(db, "vehicle_photos"), where("vehicleFolio", "==", vehicleFolio))).catch(() => ({ forEach: () => {} })),
+        getDocs(query(collection(db, "vehicle_docs"), where("vehicleFolio", "==", vehicleFolio), where("type", "==", "admissionPass"))).catch(() => ({ empty: true })),
+        getDocs(query(collection(db, "vehicle_docs"), where("vehicleFolio", "==", vehicleFolio), where("type", "==", "inventoryDoc"))).catch(() => ({ empty: true }))
       ]);
 
-      const photosMap = {};
+      const photos = [];
       photosSnap.forEach(d => {
         const data = d.data();
-        if (data.vehicleFolio && data.url) {
-          if (!photosMap[data.vehicleFolio]) photosMap[data.vehicleFolio] = [];
-          photosMap[data.vehicleFolio].push({ index: data.index ?? 0, url: data.url });
-        }
+        if (data.url) photos.push({ index: data.index ?? 0, url: data.url });
       });
+      photos.sort((a, b) => a.index - b.index);
 
-      const docsMap = {};
-      docsSnap.forEach(d => {
-        const data = d.data();
-        if (data.vehicleFolio && data.type && data.url) {
-          if (!docsMap[data.vehicleFolio]) docsMap[data.vehicleFolio] = {};
-          docsMap[data.vehicleFolio][data.type] = data.url;
-        }
-      });
+      let admissionPassUrl = '';
+      if (!admissionSnap.empty && admissionSnap.docs) {
+        admissionPassUrl = admissionSnap.docs[0].data()?.url || '';
+      }
 
-      list.forEach(v => {
-        if (photosMap[v.folio] && photosMap[v.folio].length > 0) {
-          photosMap[v.folio].sort((a, b) => a.index - b.index);
-          v.imageUrls = photosMap[v.folio].map(p => p.url);
-        }
-        if (docsMap[v.folio]) {
-          if (docsMap[v.folio].admissionPass) v.admissionPassUrl = docsMap[v.folio].admissionPass;
-          if (docsMap[v.folio].inventoryDoc) v.inventoryDocUrl = docsMap[v.folio].inventoryDoc;
-        }
-      });
-    } catch (extraErr) {
-      console.warn("Extra docs/photos fetch error:", extraErr);
+      let inventoryDocUrl = '';
+      if (!inventorySnap.empty && inventorySnap.docs) {
+        inventoryDocUrl = inventorySnap.docs[0].data()?.url || '';
+      }
+
+      return {
+        imageUrls: photos.map(p => p.url),
+        admissionPassUrl,
+        inventoryDocUrl
+      };
+    } catch (err) {
+      console.warn("getVehicleFullMedia error:", err);
+      return { imageUrls: [], admissionPassUrl: '', inventoryDocUrl: '' };
     }
-
-    // Sync and merge with localStorage cache for fallback operations
-    try {
-      const localList = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
-      const localMap = new Map(localList.map(lv => [lv.folio, lv]));
-
-      // Merge local parts & fields into cloud list
-      list.forEach(v => {
-        const lv = localMap.get(v.folio);
-        if (lv) {
-          const deletedIds = new Set(lv.deletedPartIds || []);
-          const cloudParts = (v.orderedParts || []).filter(p => !deletedIds.has(p.id));
-
-          if (lv.orderedParts && lv.orderedParts.length > 0) {
-            const partMap = new Map();
-            cloudParts.forEach(p => { if (p.id) partMap.set(p.id, p); });
-            lv.orderedParts.forEach(p => {
-              if (p.id && !deletedIds.has(p.id)) {
-                partMap.set(p.id, { ...partMap.get(p.id), ...p });
-              }
-            });
-            v.orderedParts = Array.from(partMap.values());
-          } else {
-            v.orderedParts = cloudParts;
-          }
-        }
-      });
-
-      // Include local-only vehicles if any
-      const cloudFolios = new Set(list.map(v => v.folio));
-      localList.forEach(lv => {
-        if (lv.folio && !cloudFolios.has(lv.folio)) {
-          list.push(lv);
-        }
-      });
-
-      // Strip heavy base64 data to avoid exceeding localStorage quota
-      const lightList = list.map(v => {
-        const { imageUrls, admissionPassUrl, inventoryDocUrl, primaryPhoto, ...rest } = v;
-        return rest;
-      });
-      localStorage.setItem("workshop_vehicles", JSON.stringify(lightList));
-    } catch (syncErr) {
-      console.warn("Could not sync vehicles to localStorage:", syncErr);
-    }
-
-    return list;
-  } catch (e) {
-    console.error("Firestore getVehiclesList error:", e);
-    const local = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
-    return local.filter(v => v.folio !== "V-1001" && v.folio !== "V-1002" && v.folio !== "V-1003");
-  }
+  }, 60_000);
 };
 
 export const saveVehicle = async (vehicle) => {
@@ -538,6 +625,7 @@ export const saveVehicle = async (vehicle) => {
       });
     }
     localStorage.setItem("workshop_vehicles", JSON.stringify(list));
+    notifyDataChanged(['vehicles_list', `vehicle_media_${vehicle.folio}`]);
     return;
   }
   try {
@@ -555,7 +643,7 @@ export const saveVehicle = async (vehicle) => {
       insurance: '',
       details: '',
       ...metaData,
-      primaryPhoto: imageUrls.length > 0 ? imageUrls[0] : '',
+      primaryPhoto: imageUrls.length > 0 ? imageUrls[0] : (metaData.primaryPhoto || ''),
       imageUrls: imageUrls.length <= 2 ? imageUrls : imageUrls.slice(0, 2),
       admissionPassUrl: (admissionPassUrl.length < 150000) ? admissionPassUrl : '',
       inventoryDocUrl: (inventoryDocUrl.length < 150000) ? inventoryDocUrl : '',
@@ -598,6 +686,7 @@ export const saveVehicle = async (vehicle) => {
     if (!vehicle.isPendingRegistration && vehicle.orderNumber) {
       await linkPendingSiniestroToVehicle(vehicle.orderNumber, vehicle.folio);
     }
+    notifyDataChanged(['vehicles_list', `vehicle_media_${vehicle.folio}`]);
   } catch (e) {
     console.error("Firestore saveVehicle error:", e);
     if (e.message && (e.message.includes("exceeds the maximum allowed size") || e.message.includes("supera el límite"))) {
@@ -608,6 +697,7 @@ export const saveVehicle = async (vehicle) => {
     if (!vehicle.isPendingRegistration && vehicle.orderNumber) {
       await linkPendingSiniestroToVehicle(vehicle.orderNumber, vehicle.folio);
     }
+    notifyDataChanged(['vehicles_list', `vehicle_media_${vehicle.folio}`]);
   }
 };
 
@@ -616,51 +706,56 @@ export const toggleVehicleStatus = async (folio, currentStatus) => {
     const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
     const updated = list.map(v => v.folio === folio ? { ...v, active: !currentStatus } : v);
     localStorage.setItem("workshop_vehicles", JSON.stringify(updated));
+    notifyDataChanged(['vehicles_list']);
     return;
   }
   try {
     await updateDoc(doc(db, "vehicles", folio), { active: !currentStatus });
+    notifyDataChanged(['vehicles_list']);
   } catch (e) {
     console.error("Firestore toggleVehicleStatus error:", e);
     useLocalFallback = true;
     await toggleVehicleStatus(folio, currentStatus);
+    notifyDataChanged(['vehicles_list']);
   }
 };
 
 
 // --- OUTGOINGS / TRANSACTION SERVICES ---
 
-export const getOutgoingsList = async () => {
-  try {
-    const querySnapshot = await getDocs(collection(db, "outgoings"));
-    const list = [];
-    querySnapshot.forEach((doc) => {
-      list.push({ id: doc.id, ...doc.data() });
-    });
-
-    // Merge & sync local cache
+export const getOutgoingsList = async (forceRefresh = false) => {
+  return getOrFetchCached('outgoings_list', async () => {
     try {
-      const local = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
-      const cloudIds = new Set(list.map(o => o.id));
-      local.forEach(lo => {
-        if (lo.id && !cloudIds.has(lo.id)) list.push(lo);
+      const querySnapshot = await getDocs(collection(db, "outgoings"));
+      const list = [];
+      querySnapshot.forEach((doc) => {
+        list.push({ id: doc.id, ...doc.data() });
       });
-      localStorage.setItem("workshop_outgoings", JSON.stringify(list));
-    } catch (syncErr) {
-      console.warn("Could not sync outgoings to local cache:", syncErr);
-    }
 
-    return list.sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort by date descending
-  } catch (e) {
-    if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
-      console.warn("Firestore getOutgoingsList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
-    } else {
-      console.error("Firestore getOutgoingsList error:", e);
+      // Merge & sync local cache
+      try {
+        const local = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+        const cloudIds = new Set(list.map(o => o.id));
+        local.forEach(lo => {
+          if (lo.id && !cloudIds.has(lo.id)) list.push(lo);
+        });
+        localStorage.setItem("workshop_outgoings", JSON.stringify(list));
+      } catch (syncErr) {
+        console.warn("Could not sync outgoings to local cache:", syncErr);
+      }
+
+      return list.sort((a, b) => new Date(b.date) - new Date(a.date)); // Sort by date descending
+    } catch (e) {
+      if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
+        console.warn("Firestore getOutgoingsList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
+      } else {
+        console.error("Firestore getOutgoingsList error:", e);
+      }
+      useLocalFallback = true;
+      const local = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
+      return local.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
-    useLocalFallback = true;
-    const local = JSON.parse(localStorage.getItem("workshop_outgoings") || "[]");
-    return local.sort((a, b) => new Date(b.date) - new Date(a.date));
-  }
+  }, CACHE_TTL_MS, forceRefresh);
 };
 
 export const registerOutgoing = async (outgoing) => {
@@ -694,6 +789,7 @@ export const registerOutgoing = async (outgoing) => {
     };
     outgoings.push(newOutgoing);
     localStorage.setItem("workshop_outgoings", JSON.stringify(outgoings));
+    notifyDataChanged(['outgoings_list', 'inventory_list']);
     return newOutgoing;
   }
   
@@ -728,6 +824,7 @@ export const registerOutgoing = async (outgoing) => {
       });
     });
     
+    notifyDataChanged(['outgoings_list', 'inventory_list']);
     return { id: outgoingId, ...outgoing, stockDeducted: deductAmount };
   } catch (e) {
     console.error("Transaction failed: ", e);
@@ -770,7 +867,7 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
     if (targetFolio) {
       await checkAndCleanupProvisionalVehicle(targetFolio);
     }
-    notifyDataChanged();
+    notifyDataChanged(['outgoings_list', 'inventory_list']);
     return true;
   }
 
@@ -812,7 +909,7 @@ export const deleteOutgoing = async (outgoingId, currentUserRole) => {
     if (targetFolio) {
       await checkAndCleanupProvisionalVehicle(targetFolio);
     }
-    notifyDataChanged();
+    notifyDataChanged(['outgoings_list', 'inventory_list']);
     return true;
   } catch (e) {
     console.error("deleteOutgoing error: ", e);
@@ -880,6 +977,7 @@ export const updateOutgoing = async (outgoingId, updatedOutgoing, currentUserRol
     };
     outgoings[outIndex] = updatedRecord;
     localStorage.setItem("workshop_outgoings", JSON.stringify(outgoings));
+    notifyDataChanged(['outgoings_list', 'inventory_list']);
     return updatedRecord;
   }
 
@@ -939,6 +1037,7 @@ export const updateOutgoing = async (outgoingId, updatedOutgoing, currentUserRol
       transaction.update(outgoingRef, recordToSave);
     });
 
+    notifyDataChanged(['outgoings_list', 'inventory_list']);
     return { id: outgoingId, ...updatedOutgoing, stockDeducted: newDeductAmount };
   } catch (e) {
     console.error("updateOutgoing error: ", e);
@@ -1060,6 +1159,7 @@ export const saveOrderedPart = async (folio, part) => {
     }
     list[index].orderedParts = parts;
     localStorage.setItem("workshop_vehicles", JSON.stringify(list));
+    notifyDataChanged(['vehicles_list']);
     return cleanPart;
   }
   try {
@@ -1093,6 +1193,7 @@ export const saveOrderedPart = async (folio, part) => {
       console.warn("saveOrderedPart: localStorage sync warning:", syncErr);
     }
 
+    notifyDataChanged(['vehicles_list']);
     return cleanPart;
   } catch (e) {
     console.error("Firestore saveOrderedPart error:", e);
@@ -1112,7 +1213,7 @@ export const deleteOrderedPart = async (folio, partId) => {
       localStorage.setItem("workshop_vehicles", JSON.stringify(list));
     }
     await checkAndCleanupProvisionalVehicle(folio);
-    notifyDataChanged();
+    notifyDataChanged(['vehicles_list']);
     return;
   }
   try {
@@ -1124,7 +1225,7 @@ export const deleteOrderedPart = async (folio, partId) => {
       await updateDoc(vehicleRef, { orderedParts: parts });
     }
     await checkAndCleanupProvisionalVehicle(folio);
-    notifyDataChanged();
+    notifyDataChanged(['vehicles_list']);
   } catch (e) {
     console.error("Firestore deleteOrderedPart error:", e);
     const list = JSON.parse(localStorage.getItem("workshop_vehicles") || "[]");
@@ -1134,12 +1235,12 @@ export const deleteOrderedPart = async (folio, partId) => {
       localStorage.setItem("workshop_vehicles", JSON.stringify(list));
     }
     await checkAndCleanupProvisionalVehicle(folio);
-    notifyDataChanged();
+    notifyDataChanged(['vehicles_list']);
   }
 };
 
-export const getAllPartsList = async () => {
-  const vehicles = await getVehiclesList();
+export const getAllPartsList = async (preloadedVehicles = null) => {
+  const vehicles = preloadedVehicles || await getVehiclesList();
   const allParts = [];
   
   vehicles.forEach(v => {
@@ -1321,86 +1422,90 @@ export const addVehicleComment = async (commentData) => {
 
 // --- INVOICES SERVICES (GESTIÓN DE FACTURAS EMITIDAS) ---
 
-export const getInvoicesList = async () => {
-  // Cargar mapa de PDFs desde IndexedDB
-  const localPdfsMap = await getAllInvoicePdfsMap();
+export const getInvoicesList = async (forceRefresh = false) => {
+  return getOrFetchCached('invoices_list', async () => {
+    // Cargar mapa de PDFs desde IndexedDB
+    const localPdfsMap = await getAllInvoicePdfsMap();
 
-  if (useLocalFallback) {
-    const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
-    const merged = local.map(inv => {
-      const storedPdf = localPdfsMap[inv.id];
-      if (storedPdf) {
-        return { ...inv, pdfUrl: storedPdf.pdfUrl, pdfName: storedPdf.pdfName || inv.pdfName };
-      }
-      return inv;
-    });
-    return merged.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
-  }
-  try {
-    const snapshot = await getDocs(collection(db, "invoices"));
-    const list = [];
-    snapshot.forEach(d => list.push({ id: d.id, ...d.data() }));
-
-    // Fetch invoice PDF docs in parallel if stored separately
+    if (useLocalFallback) {
+      const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+      const merged = local.map(inv => {
+        const storedPdf = localPdfsMap[inv.id];
+        if (storedPdf) {
+          return { ...inv, pdfUrl: storedPdf.pdfUrl, pdfName: storedPdf.pdfName || inv.pdfName };
+        }
+        return inv;
+      });
+      return merged.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+    }
     try {
-      const docsSnap = await getDocs(collection(db, "invoice_docs"));
-      const docsMap = {};
-      docsSnap.forEach(d => {
+      const snapshot = await getDocs(collection(db, "invoices"));
+      const list = [];
+      snapshot.forEach(d => {
         const data = d.data();
-        if (data.invoiceId && data.pdfUrl) {
-          docsMap[data.invoiceId] = { pdfUrl: data.pdfUrl, pdfName: data.pdfName };
-          // Guardar también en IndexedDB para disponibilidad offline
-          saveInvoicePdf(data.invoiceId, data.pdfUrl, data.pdfName);
-        }
+        const storedPdf = localPdfsMap[d.id];
+        list.push({ 
+          id: d.id, 
+          ...data,
+          pdfUrl: storedPdf ? storedPdf.pdfUrl : (data.pdfUrl || ''),
+          pdfName: (storedPdf && storedPdf.pdfName) ? storedPdf.pdfName : (data.pdfName || '')
+        });
       });
 
-      list.forEach(inv => {
-        if (docsMap[inv.id]) {
-          inv.pdfUrl = docsMap[inv.id].pdfUrl;
-          if (docsMap[inv.id].pdfName) inv.pdfName = docsMap[inv.id].pdfName;
-        } else if (localPdfsMap[inv.id]) {
-          inv.pdfUrl = localPdfsMap[inv.id].pdfUrl;
-          if (localPdfsMap[inv.id].pdfName) inv.pdfName = localPdfsMap[inv.id].pdfName;
-        }
-      });
-    } catch (docsErr) {
-      console.warn("Error fetching invoice docs:", docsErr);
-      list.forEach(inv => {
-        if (localPdfsMap[inv.id]) {
-          inv.pdfUrl = localPdfsMap[inv.id].pdfUrl;
-          if (localPdfsMap[inv.id].pdfName) inv.pdfName = localPdfsMap[inv.id].pdfName;
-        }
-      });
-    }
-
-    // Keep local storage mirror in sync (eliminando base64 pesado para no exceder cuota de 5MB)
-    try {
-      const lightList = list.map(inv => {
-        const { pdfUrl, ...rest } = inv;
-        return rest;
-      });
-      localStorage.setItem("workshop_invoices", JSON.stringify(lightList));
-    } catch (lsErr) {
-      console.warn("Could not sync invoices to localStorage:", lsErr);
-    }
-    
-    return list.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
-  } catch (e) {
-    if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
-      console.warn("Firestore getInvoicesList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
-    } else {
-      console.warn("Firestore getInvoicesList (usando fallback local):", e?.message || e);
-    }
-    const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
-    const merged = local.map(inv => {
-      const storedPdf = localPdfsMap[inv.id];
-      if (storedPdf) {
-        return { ...inv, pdfUrl: storedPdf.pdfUrl, pdfName: storedPdf.pdfName || inv.pdfName };
+      // Keep local storage mirror in sync (eliminando base64 pesado para no exceder cuota de 5MB)
+      try {
+        const lightList = list.map(inv => {
+          const { pdfUrl, ...rest } = inv;
+          return rest;
+        });
+        localStorage.setItem("workshop_invoices", JSON.stringify(lightList));
+      } catch (lsErr) {
+        console.warn("Could not sync invoices to localStorage:", lsErr);
       }
-      return inv;
-    });
-    return merged.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+      
+      return list.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+    } catch (e) {
+      if (e?.code === 'permission-denied' || (e?.message && e.message.includes('permissions'))) {
+        console.warn("Firestore getInvoicesList: Permisos restringidos en Firestore nube, usando almacenamiento local.");
+      } else {
+        console.warn("Firestore getInvoicesList (usando fallback local):", e?.message || e);
+      }
+      const local = JSON.parse(localStorage.getItem("workshop_invoices") || "[]");
+      const merged = local.map(inv => {
+        const storedPdf = localPdfsMap[inv.id];
+        if (storedPdf) {
+          return { ...inv, pdfUrl: storedPdf.pdfUrl, pdfName: storedPdf.pdfName || inv.pdfName };
+        }
+        return inv;
+      });
+      return merged.sort((a, b) => (parseInt(b.invoiceFolio) || 0) - (parseInt(a.invoiceFolio) || 0));
+    }
+  }, CACHE_TTL_MS, forceRefresh);
+};
+
+/**
+ * Fetches the full PDF url on-demand for a single invoice when requested.
+ */
+export const getInvoicePdfUrl = async (invoiceId) => {
+  if (!invoiceId) return null;
+  // 1. Check IndexedDB
+  const localDoc = await getInvoicePdf(invoiceId);
+  if (localDoc && localDoc.pdfUrl) return localDoc.pdfUrl;
+
+  // 2. Fetch from Firestore invoice_docs
+  try {
+    const docSnap = await getDocs(query(collection(db, "invoice_docs"), where("invoiceId", "==", invoiceId)));
+    if (!docSnap.empty) {
+      const data = docSnap.docs[0].data();
+      if (data.pdfUrl) {
+        await saveInvoicePdf(invoiceId, data.pdfUrl, data.pdfName);
+        return data.pdfUrl;
+      }
+    }
+  } catch (err) {
+    console.warn("getInvoicePdfUrl error:", err);
   }
+  return null;
 };
 
 export const saveInvoice = async (invoiceData) => {
@@ -1459,7 +1564,7 @@ export const saveInvoice = async (invoiceData) => {
   const fullReturnRecord = { ...invoiceRecord, pdfUrl: pdfUrl || '' };
 
   if (useLocalFallback) {
-    notifyDataChanged();
+    notifyDataChanged(['invoices_list']);
     return fullReturnRecord;
   }
 
@@ -1479,11 +1584,11 @@ export const saveInvoice = async (invoiceData) => {
       });
     }
 
-    notifyDataChanged();
+    notifyDataChanged(['invoices_list']);
     return fullReturnRecord;
   } catch (e) {
     console.error("Firestore saveInvoice error:", e);
-    notifyDataChanged();
+    notifyDataChanged(['invoices_list']);
     return fullReturnRecord;
   }
 };
@@ -1509,7 +1614,7 @@ export const deleteInvoice = async (invoiceId) => {
     if (targetFolio) {
       await checkAndCleanupProvisionalVehicle(targetFolio);
     }
-    notifyDataChanged();
+    notifyDataChanged(['invoices_list']);
     return true;
   }
 
@@ -1534,14 +1639,14 @@ export const deleteInvoice = async (invoiceId) => {
     if (targetFolio) {
       await checkAndCleanupProvisionalVehicle(targetFolio);
     }
-    notifyDataChanged();
+    notifyDataChanged(['invoices_list']);
     return true;
   } catch (e) {
     console.error("Firestore deleteInvoice error:", e);
     if (targetFolio) {
       await checkAndCleanupProvisionalVehicle(targetFolio);
     }
-    notifyDataChanged();
+    notifyDataChanged(['invoices_list']);
     return true;
   }
 };
@@ -1610,7 +1715,7 @@ export const checkAndCleanupProvisionalVehicle = async (targetFolio) => {
       }
     }
 
-    notifyDataChanged();
+    notifyDataChanged(['vehicles_list']);
   } catch (err) {
     console.warn("Error cleaning up provisional vehicle:", err);
   }
@@ -1810,13 +1915,20 @@ export const linkPendingSiniestroToVehicle = async (rawSiniestro, officialVehicl
  * Returns a list of all pending/provisional vehicles that need official registration,
  * along with statistics of registered parts, outgoings, and invoices.
  */
-export const getPendingSiniestrosList = async () => {
+export const getPendingSiniestrosList = async (preloaded = null) => {
   try {
-    const [vehicles, outgoings, invoices] = await Promise.all([
-      getVehiclesList().catch(() => []),
-      getOutgoingsList().catch(() => []),
-      getInvoicesList().catch(() => [])
-    ]);
+    let vehicles, outgoings, invoices;
+    if (preloaded && preloaded.vehicles && preloaded.outgoings && preloaded.invoices) {
+      vehicles = preloaded.vehicles;
+      outgoings = preloaded.outgoings;
+      invoices = preloaded.invoices;
+    } else {
+      [vehicles, outgoings, invoices] = await Promise.all([
+        getVehiclesList().catch(() => []),
+        getOutgoingsList().catch(() => []),
+        getInvoicesList().catch(() => [])
+      ]);
+    }
 
     const pendingVehicles = (vehicles || []).filter(v => v.isPendingRegistration);
 

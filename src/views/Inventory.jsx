@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Search, Edit2, Trash2, FileText, Download, AlertTriangle, Layers, Droplet, Scale, Ruler, Box } from 'lucide-react';
 import { getInventoryList, saveInventoryItem, removeInventoryItem, subscribeToCollection } from '../config/dbService';
+import { TableSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 import { generateInventoryPDF, exportToCSV } from '../utils/reports';
 
 export const UNIT_TYPES = [
@@ -135,7 +136,7 @@ const Inventory = ({ currentUser }) => {
   const loadInventory = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const data = await getInventoryList();
+      const data = await getInventoryList(isSilent);
       setItems(data);
     } catch (err) {
       console.error(err);
@@ -504,8 +505,8 @@ const Inventory = ({ currentUser }) => {
       </div>
 
       {loading ? (
-        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
-          Cargando inventario...
+        <div className="glass-panel" style={{ padding: '1rem', overflow: 'hidden' }}>
+          <TableSkeleton rows={8} columns={7} />
         </div>
       ) : (
         <div className="glass-panel table-container">

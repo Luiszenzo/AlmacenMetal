@@ -31,6 +31,7 @@ import {
   saveProvisionalVehicleForSiniestro,
   subscribeToCollection
 } from '../config/dbService';
+import { TableSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 import { generatePartsPDF, exportToCSV } from '../utils/reports';
 
 const PEDIDO_SUGGESTIONS = ['AGENCIA', 'TAPICERO', 'MOSTRADOR', 'ALMACÉN', 'TALLER', 'PENDIENTE', 'LISTO'];
@@ -78,14 +79,10 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
   const loadData = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const [vResult, pResult] = await Promise.allSettled([
-        getVehiclesList(),
-        getAllPartsList()
-      ]);
-      setVehicles(vResult.status === 'fulfilled' ? (vResult.value || []) : []);
-      setParts(pResult.status === 'fulfilled' ? (pResult.value || []) : []);
-      if (vResult.status === 'rejected') console.error('Error cargando vehículos:', vResult.reason);
-      if (pResult.status === 'rejected') console.error('Error cargando refacciones:', pResult.reason);
+      const vList = await getVehiclesList(isSilent);
+      const pList = await getAllPartsList(vList);
+      setVehicles(vList || []);
+      setParts(pList || []);
     } catch (err) {
       console.error('Error cargando refacciones y vehículos:', err);
     } finally {
@@ -574,9 +571,8 @@ const Parts = ({ currentUser, onNavigateToVehicle }) => {
 
       {/* ====== TABLE SECTION ====== */}
       {loading ? (
-        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          <Layers className="animate-spin" size={32} style={{ color: 'var(--primary)', marginBottom: '0.75rem' }} />
-          <p>Cargando catálogo de refacciones...</p>
+        <div className="glass-panel" style={{ padding: '1rem', overflow: 'hidden' }}>
+          <TableSkeleton rows={8} columns={10} />
         </div>
       ) : filteredParts.length === 0 ? (
         <div className="glass-panel" style={{ padding: '3.5rem 1.5rem', textAlign: 'center' }}>

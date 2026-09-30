@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart3, TrendingUp, DollarSign, Car, FileText } from 'lucide-react';
 import { getVehiclesList, getOutgoingsList } from '../config/dbService';
+import { StatsGridSkeleton, TableSkeleton } from '../components/LoadingSkeleton';
 import { generateGeneralPDF } from '../utils/reports';
 
 const Reports = () => {
@@ -12,10 +13,12 @@ const Reports = () => {
   const loadData = async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const vList = await getVehiclesList();
-      const oList = await getOutgoingsList();
-      setVehicles(vList);
-      setOutgoings(oList);
+      const [vList, oList] = await Promise.all([
+        getVehiclesList(isSilent),
+        getOutgoingsList(isSilent)
+      ]);
+      setVehicles(vList || []);
+      setOutgoings(oList || []);
     } catch (err) {
       console.error(err);
     } finally {
@@ -87,8 +90,11 @@ const Reports = () => {
       </div>
 
       {loading ? (
-        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
-          Cargando reportes...
+        <div>
+          <StatsGridSkeleton count={4} />
+          <div className="glass-panel" style={{ padding: '1rem', marginTop: '1.5rem', overflow: 'hidden' }}>
+            <TableSkeleton rows={6} columns={6} />
+          </div>
         </div>
       ) : (
         <div>

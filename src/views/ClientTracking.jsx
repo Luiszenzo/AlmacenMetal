@@ -11,6 +11,7 @@ import {
   addVehicleComment
 } from '../config/dbService';
 import { checkSearchThrottle, sanitizeInput } from '../config/security';
+import { DetailModalSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 
 const PROCESS_LABELS = {
   pendiente: 'Pendiente',
@@ -395,6 +396,13 @@ const ClientTracking = ({ onBackToLogin }) => {
           {/* Quick suggestions for testing */}
         </div>
 
+        {/* Searching Skeleton State */}
+        {searching && (
+          <div style={{ marginTop: '1.5rem' }}>
+            <DetailModalSkeleton />
+          </div>
+        )}
+
         {/* Not Found State */}
         {hasSearched && !searching && !vehicle && (
           <div className="glass-panel" style={{ padding: '3rem 2rem', textAlign: 'center', borderRadius: '16px' }}>
@@ -612,7 +620,12 @@ const ClientTracking = ({ onBackToLogin }) => {
                 const orphanEntries = visibleUpdates.filter(u => u.type === 'entry' && (!u.folderId || !folders.some(f => f.id === u.folderId)));
 
                 if (loadingDetails) {
-                  return <p style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Cargando bitácora...</p>;
+                  return (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      <div className="skeleton-card" style={{ height: '70px', borderRadius: '12px' }} />
+                      <div className="skeleton-card" style={{ height: '70px', borderRadius: '12px' }} />
+                    </div>
+                  );
                 }
 
                 if (folders.length === 0 && legacyEntries.length === 0 && orphanEntries.length === 0) {

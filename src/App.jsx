@@ -17,6 +17,7 @@ import ClientTracking from './views/ClientTracking';
 
 // Components
 import Sidebar from './components/Sidebar';
+import { AppSplashLoader } from './components/LoadingSkeleton';
 
 function App() {
   const [user, setUser] = useState(null);
@@ -102,23 +103,7 @@ function App() {
   };
 
   if (loading) {
-    return (
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        width: '100vw',
-        background: '#0b0f19',
-        color: '#f8fafc',
-        fontFamily: 'sans-serif'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <h2>Iniciando Sistema de Almacén...</h2>
-          <p style={{ color: '#94a3b8', marginTop: '8px' }}>Verificando servicios e inicializando base de datos...</p>
-        </div>
-      </div>
-    );
+    return <AppSplashLoader title="Iniciando Metal Shapers" subtitle="Conectando servicios y sincronizando base de datos..." />;
   }
 
   // If user is not authenticated, show Client Tracking Search by default, or Login screen

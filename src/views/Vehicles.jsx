@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import {
   getVehiclesList,
+  getVehicleFullMedia,
   saveVehicle,
   toggleVehicleStatus,
   getOutgoingsList,
@@ -25,6 +26,7 @@ import {
   deletePendingSiniestroForced,
   subscribeToCollection
 } from '../config/dbService';
+import { CardGridSkeleton, DetailModalSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 import { generateVehiclePDF, generateGeneralPDF, generatePartsPDF } from '../utils/reports';
 import JSZip from 'jszip';
 
@@ -291,12 +293,12 @@ const Vehicles = ({ currentUser }) => {
   const loadData = useCallback(async (isSilent = false) => {
     if (!isSilent) setLoading(true);
     try {
-      const [vList, oList, invList, pList] = await Promise.all([
-        getVehiclesList(),
-        getOutgoingsList(),
-        getInvoicesList(),
-        getPendingSiniestrosList()
+      const [vList, oList, invList] = await Promise.all([
+        getVehiclesList(isSilent),
+        getOutgoingsList(isSilent),
+        getInvoicesList(isSilent)
       ]);
+      const pList = await getPendingSiniestrosList({ vehicles: vList, outgoings: oList, invoices: invList });
       setVehicles(vList);
       setOutgoings(oList);
       setInvoices(invList);
@@ -362,7 +364,7 @@ const Vehicles = ({ currentUser }) => {
     setFormLocation(v.location || 'PISO');
     setFormType(v.type || 'Coche');
     setFormDetails(v.details || '');
-    setFormImageUrls(v.imageUrls || []);
+    setFormImageUrls(v.imageUrls || (v.primaryPhoto ? [v.primaryPhoto] : []));
     setFormAdmissionPass(v.admissionPassUrl || '');
     setFormInventoryDoc(v.inventoryDocUrl || '');
     setFormBodyworkStatus(v.bodyworkStatus || 'pendiente');
@@ -373,6 +375,13 @@ const Vehicles = ({ currentUser }) => {
     setFormEntryDate(new Date(dateObj.getTime() - tzOffset).toISOString().slice(0, 16));
     setFormError('');
     setShowAddModal(true);
+
+    // Fetch full media in background if vehicle has photos/docs
+    getVehicleFullMedia(v.folio).then(media => {
+      if (media.imageUrls && media.imageUrls.length > 0) setFormImageUrls(media.imageUrls);
+      if (media.admissionPassUrl) setFormAdmissionPass(media.admissionPassUrl);
+      if (media.inventoryDocUrl) setFormInventoryDoc(media.inventoryDocUrl);
+    }).catch(() => {});
   };
 
   const handleOpenDetails = (v) => {
@@ -388,6 +397,20 @@ const Vehicles = ({ currentUser }) => {
     setPartName(''); setPartSupplier('AGENCIA'); setPartPurchaseOrder('PENDIENTE'); setPartDeliveryDate(''); setPartCost(''); setPartNotes('');
     setShowDetailModal(true);
     loadVehicleUpdates(v.folio);
+
+    // Fetch full media in background so modal displays all photos/docs
+    getVehicleFullMedia(v.folio).then(media => {
+      setSelectedVehicle(prev => {
+        if (!prev || prev.folio !== v.folio) return prev;
+        return {
+          ...prev,
+          imageUrls: media.imageUrls && media.imageUrls.length > 0 ? media.imageUrls : prev.imageUrls,
+          admissionPassUrl: media.admissionPassUrl || prev.admissionPassUrl,
+          inventoryDocUrl: media.inventoryDocUrl || prev.inventoryDocUrl
+        };
+      });
+    }).catch(() => {});
+
     // Sync slider with saved progress or derive from status
     const savedProgress = typeof v.serviceProgress === 'number' ? v.serviceProgress
       : (!v.active || v.mechanicsStatus === 'terminado' || v.bodyworkStatus === 'terminado') ? 100
@@ -2241,9 +2264,7 @@ const Vehicles = ({ currentUser }) => {
 
       {/* Cards Grid */}
       {loading ? (
-        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
-          Cargando vehículos...
-        </div>
+        <CardGridSkeleton count={6} />
       ) : filteredVehicles.length === 0 ? (
         <div className="glass-panel" style={{ padding: '4rem', textAlign: 'center', color: 'var(--text-secondary)' }}>
           No se encontraron vehículos con los filtros seleccionados.

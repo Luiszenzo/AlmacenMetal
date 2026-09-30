@@ -22,7 +22,8 @@ import {
   TrendingUp,
   CreditCard
 } from 'lucide-react';
-import { getInvoicesList, saveInvoice, deleteInvoice, getVehiclesList, saveProvisionalVehicleForSiniestro, subscribeToCollection } from '../config/dbService';
+import { getInvoicesList, getInvoicePdfUrl, saveInvoice, deleteInvoice, getVehiclesList, saveProvisionalVehicleForSiniestro, subscribeToCollection } from '../config/dbService';
+import { TableSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 import { generateInvoicesPDF, exportToCSV } from '../utils/reports';
 
 // Currency formatter
@@ -98,8 +99,8 @@ const Invoices = ({ currentUser }) => {
     if (!isSilent) setLoading(true);
     try {
       const [invList, vehList] = await Promise.all([
-        getInvoicesList(),
-        getVehiclesList()
+        getInvoicesList(isSilent),
+        getVehiclesList(isSilent)
       ]);
       setInvoices(invList);
       setVehicles(vehList);
@@ -696,11 +697,15 @@ const Invoices = ({ currentUser }) => {
             </thead>
             <tbody>
               {loading ? (
-                <tr>
-                  <td colSpan={isAuthorized ? 15 : 14} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
-                    Cargando registros de facturas...
-                  </td>
-                </tr>
+                Array.from({ length: 6 }).map((_, rIdx) => (
+                  <tr key={`sk_${rIdx}`}>
+                    {Array.from({ length: isAuthorized ? 15 : 14 }).map((_, cIdx) => (
+                      <td key={`sk_cell_${cIdx}`} style={{ padding: '12px 10px' }}>
+                        <div className="skeleton-shimmer" style={{ height: '18px', borderRadius: '4px', width: cIdx === 0 ? '50%' : cIdx === 1 ? '70%' : '85%' }} />
+                      </td>
+                    ))}
+                  </tr>
+                ))
               ) : filteredInvoices.length === 0 ? (
                 <tr>
                   <td colSpan={isAuthorized ? 15 : 14} style={{ textAlign: 'center', padding: '48px', color: 'var(--text-secondary)' }}>

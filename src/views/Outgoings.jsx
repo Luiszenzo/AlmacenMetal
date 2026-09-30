@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Search, Calendar, User, Package, Car, ArrowUpRight, ChevronDown, Layers, Droplet, Scale, Ruler, Box, Edit2, Trash2 } from 'lucide-react';
 import { getOutgoingsList, registerOutgoing, updateOutgoing, deleteOutgoing, getInventoryList, getVehiclesList, getUsersList, saveProvisionalVehicleForSiniestro, subscribeToCollection } from '../config/dbService';
+import { TableSkeleton, LoadingSpinner } from '../components/LoadingSkeleton';
 import { formatStockDisplay } from './Inventory';
 
 const formatOutgoingQty = (out) => {
@@ -80,10 +81,10 @@ const Outgoings = ({ currentUser }) => {
     if (!isSilent) setLoading(true);
     try {
       const [outRes, invRes, vehRes, usrRes] = await Promise.allSettled([
-        getOutgoingsList(),
-        getInventoryList(),
-        getVehiclesList(),
-        getUsersList()
+        getOutgoingsList(isSilent),
+        getInventoryList(isSilent),
+        getVehiclesList(isSilent),
+        getUsersList(isSilent)
       ]);
       
       setOutgoings(outRes.status === 'fulfilled' ? (outRes.value || []) : []);
@@ -579,8 +580,8 @@ const Outgoings = ({ currentUser }) => {
       </div>
 
       {loading ? (
-        <div className="glass-panel" style={{ padding: '3rem', textAlign: 'center' }}>
-          Cargando historial de salidas...
+        <div className="glass-panel" style={{ padding: '1rem', overflow: 'hidden' }}>
+          <TableSkeleton rows={8} columns={8} />
         </div>
       ) : (
         <div className="glass-panel table-container">
